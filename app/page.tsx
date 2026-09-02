@@ -983,7 +983,7 @@ export default function Home() {
                                     onClick={(event) => {
                                       event.stopPropagation();
                                       setSelectedPdfTextId(box.id);
-                                      setEditText(box.text);
+                                      setSelectedTextId("");
                                     }}
                                     style={{
                                       left: `${box.xRatio * 100}%`,
