@@ -430,7 +430,7 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
       .forEach((box) => {
         const x = box.xRatio * canvas.width;
         const y = box.yRatio * canvas.height;
-        const width = Math.max(18, box.widthRatio * canvas.width);
+        const width = Math.max(18, Math.max(box.widthRatio, 0.98 - box.xRatio) * canvas.width);
         const height = Math.max(box.fontSize * scale * 1.4, box.heightRatio * canvas.height);
         context.fillStyle = "#ffffff";
         context.fillRect(Math.max(0, x - 2), Math.max(0, y - 2), width + 12, height + 4);
@@ -1057,13 +1057,14 @@ export default function Home() {
                               currentTextBoxes.map((box) => {
                                 const changed = box.text !== box.originalText;
                                 const selected = selectedPdfTextId === box.id;
+                                const displayWidthRatio = selected || changed ? Math.max(box.widthRatio, 0.98 - box.xRatio) : box.widthRatio;
                                 return (
                                   <div
                                     className={`absolute overflow-hidden rounded-sm border ${
                                       selected
-                                        ? "border-[#f0b35a] bg-white/95 text-[#111827] ring-2 ring-[#f0b35a]"
+                                        ? "border-[#f0b35a] bg-white text-[#111827] ring-2 ring-[#f0b35a]"
                                         : changed
-                                          ? "border-transparent bg-white/95 text-[#111827]"
+                                          ? "border-transparent bg-white text-[#111827]"
                                           : "border-transparent bg-[#e7f0ce]/10 text-transparent hover:border-[#1f6f67] hover:bg-[#e7f0ce]/40"
                                     }`}
                                     key={box.id}
@@ -1075,7 +1076,7 @@ export default function Home() {
                                     style={{
                                       left: `${box.xRatio * 100}%`,
                                       top: `${box.yRatio * 100}%`,
-                                      width: `${box.widthRatio * 100}%`,
+                                      width: `${displayWidthRatio * 100}%`,
                                       height: `${Math.max(18, box.heightRatio * canvasSize.height)}px`,
                                       fontSize: `${Math.max(10, box.fontSize * 1.35)}px`,
                                     }}
