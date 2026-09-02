@@ -214,6 +214,67 @@ async function imagesToPdf(files: File[]) {
   return new Blob(chunks, { type: "application/pdf" });
 }
 
+function canvasesToPdf(canvases: HTMLCanvasElement[]) {
+  const chunks: Uint8Array[] = [];
+  const offsets: number[] = [0];
+  const images = canvases.map((canvas) => ({
+    width: canvas.width,
+    height: canvas.height,
+    bytesPromise: blobFromCanvas(canvas, "image/jpeg", 0.92).then(readBytes),
+  }));
+
+  return Promise.all(images.map((image) => image.bytesPromise)).then((imageBytes) => {
+    let length = 0;
+    const add = (chunk: Uint8Array) => {
+      chunks.push(chunk);
+      length += chunk.length;
+    };
+    const addText = (value: string) => add(textBytes(value));
+    const addObject = (id: number, body: string) => {
+      offsets[id] = length;
+      addText(`${id} 0 obj\n${body}\nendobj\n`);
+    };
+    const addStream = (id: number, dict: string, stream: Uint8Array) => {
+      offsets[id] = length;
+      addText(`${id} 0 obj\n${dict}\nstream\n`);
+      add(stream);
+      addText("\nendstream\nendobj\n");
+    };
+
+    addText("%PDF-1.4\n");
+    const pageIds = canvases.map((_, index) => 3 + index * 3);
+    addObject(1, "<< /Type /Catalog /Pages 2 0 R >>");
+    addObject(2, `<< /Type /Pages /Kids [${pageIds.map((id) => `${id} 0 R`).join(" ")}] /Count ${canvases.length} >>`);
+
+    canvases.forEach((canvas, index) => {
+      const pageId = 3 + index * 3;
+      const contentId = pageId + 1;
+      const imageId = pageId + 2;
+      const content = textBytes(`q\n${canvas.width} 0 0 ${canvas.height} 0 0 cm\n/Im${index} Do\nQ\n`);
+
+      addObject(
+        pageId,
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${canvas.width} ${canvas.height}] /Resources << /XObject << /Im${index} ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>`,
+      );
+      addStream(contentId, `<< /Length ${content.length} >>`, content);
+      addStream(
+        imageId,
+        `<< /Type /XObject /Subtype /Image /Width ${canvas.width} /Height ${canvas.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imageBytes[index].length} >>`,
+        imageBytes[index],
+      );
+    });
+
+    const xrefStart = length;
+    addText(`xref\n0 ${offsets.length}\n0000000000 65535 f \n`);
+    for (let id = 1; id < offsets.length; id += 1) {
+      addText(`${String(offsets[id]).padStart(10, "0")} 00000 n \n`);
+    }
+    addText(`trailer\n<< /Size ${offsets.length} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`);
+
+    return new Blob(chunks, { type: "application/pdf" });
+  });
+}
+
 async function mergePdfs(files: File[]) {
   const merged = await PDFDocument.create();
   for (const file of files) {
@@ -339,6 +400,113 @@ async function saveSelectedTextEdits(file: File, boxes: PdfTextBox[]) {
 
   const bytes = await pdf.save({ useObjectStreams: true });
   return new Blob([bytes], { type: "application/pdf" });
+}
+
+async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: VisualText[]) {
+  const changedBoxes = boxes.filter((box) => box.text !== box.originalText);
+  if (changedBoxes.length === 0 && notes.length === 0) throw new Error("请先点击 PDF 里的文字并修改内容，或添加新文字。");
+
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer(), disableWorker: true }).promise;
+  const canvases: HTMLCanvasElement[] = [];
+  const scale = 1.6;
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("浏览器不支持 PDF 页面渲染。");
+
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvas, canvasContext: context, viewport }).promise;
+
+    changedBoxes
+      .filter((box) => box.pageNumber === pageNumber)
+      .forEach((box) => {
+        const x = box.xRatio * canvas.width;
+        const y = box.yRatio * canvas.height;
+        const width = Math.max(18, box.widthRatio * canvas.width);
+        const height = Math.max(box.fontSize * scale * 1.4, box.heightRatio * canvas.height);
+        context.fillStyle = "#ffffff";
+        context.fillRect(Math.max(0, x - 2), Math.max(0, y - 2), width + 12, height + 4);
+        context.fillStyle = "#111827";
+        context.font = `${Math.max(10, Math.round(box.fontSize * scale))}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
+        context.textBaseline = "top";
+        context.fillText(box.text || " ", x, y);
+      });
+
+    notes
+      .filter((note) => note.pageMode === "all" || note.pageNumber === pageNumber)
+      .forEach((note) => {
+        context.fillStyle = "#1f6f67";
+        context.font = `700 ${Math.max(10, Math.round(note.fontSize * scale))}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
+        context.textBaseline = "top";
+        context.fillText(note.text || " ", note.xRatio * canvas.width, note.yRatio * canvas.height);
+      });
+
+    canvases.push(canvas);
+  }
+
+  return canvasesToPdf(canvases);
+}
+
+function buildTextBoxes(
+  pdfjsLib: typeof import("pdfjs-dist/legacy/build/pdf.mjs"),
+  textContent: { items: unknown[] },
+  viewport: { width: number; height: number; transform: number[] },
+  pageNumber: number,
+  existingBoxes: PdfTextBox[],
+) {
+  const rawBoxes = textContent.items
+    .filter((item): item is typeof item & { str: string; transform: number[]; width: number; height: number } => "str" in item && Boolean(item.str.trim()))
+    .map((item, index) => {
+      const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);
+      const fontHeight = Math.max(8, Math.hypot(transform[2], transform[3]));
+      const x = transform[4];
+      const y = transform[5] - fontHeight;
+      const width = Math.max(item.width * 1.35, item.str.length * fontHeight * 0.46);
+      const height = Math.max(item.height * 1.35, fontHeight);
+
+      return {
+        id: `${pageNumber}-raw-${index}`,
+        pageNumber,
+        originalText: item.str,
+        text: item.str,
+        xRatio: Math.max(0, Math.min(1, x / viewport.width)),
+        yRatio: Math.max(0, Math.min(1, y / viewport.height)),
+        widthRatio: Math.max(0.01, Math.min(1, width / viewport.width)),
+        heightRatio: Math.max(0.01, Math.min(1, height / viewport.height)),
+        fontSize: Math.max(8, Math.round(fontHeight / 1.35)),
+      };
+    })
+    .sort((a, b) => a.yRatio - b.yRatio || a.xRatio - b.xRatio);
+
+  const lines: PdfTextBox[] = [];
+  for (const box of rawBoxes) {
+    const last = lines[lines.length - 1];
+    const sameLine = last && Math.abs(last.yRatio - box.yRatio) < 0.006;
+    const closeEnough = last && box.xRatio - (last.xRatio + last.widthRatio) < 0.035;
+
+    if (sameLine && closeEnough) {
+      const right = Math.max(last.xRatio + last.widthRatio, box.xRatio + box.widthRatio);
+      const bottom = Math.max(last.yRatio + last.heightRatio, box.yRatio + box.heightRatio);
+      const needsSpace = /[A-Za-z0-9]$/.test(last.originalText) && /^[A-Za-z0-9]/.test(box.originalText);
+      last.originalText = `${last.originalText}${needsSpace ? " " : ""}${box.originalText}`;
+      last.text = `${last.text}${needsSpace ? " " : ""}${box.text}`;
+      last.widthRatio = right - last.xRatio;
+      last.heightRatio = bottom - last.yRatio;
+      last.fontSize = Math.max(last.fontSize, box.fontSize);
+    } else {
+      lines.push({ ...box, id: `${pageNumber}-line-${lines.length}` });
+    }
+  }
+
+  return lines.map((line) => ({
+    ...line,
+    text: existingBoxes.find((box) => box.id === line.id)?.text ?? line.text,
+  }));
 }
 
 function escapeRegExp(value: string) {
@@ -495,10 +663,9 @@ export default function Home() {
       if (!canvas) return;
 
       try {
-        const pdfjsLib = await import("pdfjs-dist");
-        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
+        const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
         const data = await files[0].arrayBuffer();
-        const documentTask = pdfjsLib.getDocument({ data });
+        const documentTask = pdfjsLib.getDocument({ data, disableWorker: true });
         const pdf = await documentTask.promise;
         const pageNumber = Math.max(1, Math.min(currentPage, pdf.numPages));
         const page = await pdf.getPage(pageNumber);
@@ -513,35 +680,14 @@ export default function Home() {
         await page.render({ canvas, canvasContext: context, viewport }).promise;
 
         const textContent = await page.getTextContent();
-        const nextBoxes = textContent.items
-          .filter((item): item is typeof item & { str: string; transform: number[]; width: number; height: number } => "str" in item && Boolean(item.str.trim()))
-          .map((item, index) => {
-            const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);
-            const fontHeight = Math.max(10, Math.hypot(transform[2], transform[3]));
-            const x = transform[4];
-            const y = transform[5] - fontHeight;
-            const width = Math.max(item.width * 1.35, item.str.length * fontHeight * 0.45);
-            const height = Math.max(item.height * 1.35, fontHeight);
-
-            return {
-              id: `${pageNumber}-${index}-${item.str}`,
-              pageNumber,
-              originalText: item.str,
-              text: pdfTextBoxes.find((box) => box.id === `${pageNumber}-${index}-${item.str}`)?.text ?? item.str,
-              xRatio: Math.max(0, Math.min(1, x / viewport.width)),
-              yRatio: Math.max(0, Math.min(1, y / viewport.height)),
-              widthRatio: Math.max(0.01, Math.min(1, width / viewport.width)),
-              heightRatio: Math.max(0.01, Math.min(1, height / viewport.height)),
-              fontSize: Math.max(8, Math.round(fontHeight / 1.35)),
-            };
-          });
+        const nextBoxes = buildTextBoxes(pdfjsLib, textContent, viewport, pageNumber, pdfTextBoxes);
 
         if (!cancelled) {
           setPdfTextBoxes((current) => [
             ...current.filter((box) => box.pageNumber !== pageNumber),
             ...nextBoxes,
           ]);
-          setMessage("PDF 已打开。点击页面上的文字块即可编辑。");
+          setMessage(nextBoxes.length > 0 ? `第 ${pageNumber} 页识别到 ${nextBoxes.length} 个可编辑文字块。` : "这一页没有识别到可编辑文字块。");
         }
       } catch (error) {
         if (!cancelled) setMessage(error instanceof Error ? error.message : "PDF 渲染失败，请换个文件试试。");
@@ -673,7 +819,7 @@ export default function Home() {
       if (activeTool === "pdf-edit") {
         if (editMode === "visual") {
           const editedTextBoxes = pdfTextBoxes.filter((box) => box.text !== box.originalText);
-          const pdf = editedTextBoxes.length > 0 ? await saveSelectedTextEdits(files[0], pdfTextBoxes) : await saveVisualPdfEdits(files[0], visualTexts);
+          const pdf = await saveVisualEditorPdf(files[0], pdfTextBoxes, visualTexts);
           const outputUrl = URL.createObjectURL(pdf);
           setOutputs([{ name: `${fileBaseName(files[0].name)}-visual-edited.pdf`, size: pdf.size, url: outputUrl }]);
           clearPreview();
@@ -821,30 +967,36 @@ export default function Home() {
                           >
                             <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
                             {editMode === "visual" &&
-                              currentTextBoxes.map((box) => (
-                                <button
-                                  className={`absolute overflow-hidden rounded-sm border px-1 text-left leading-none ${
-                                    selectedPdfTextId === box.id ? "border-[#f0b35a] bg-[#fff4dc]/80" : "border-transparent bg-[#e7f0ce]/20 hover:border-[#1f6f67] hover:bg-[#e7f0ce]/60"
-                                  }`}
-                                  key={box.id}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setSelectedPdfTextId(box.id);
-                                    setEditText(box.text);
-                                  }}
-                                  style={{
-                                    left: `${box.xRatio * 100}%`,
-                                    top: `${box.yRatio * 100}%`,
-                                    width: `${box.widthRatio * 100}%`,
-                                    height: `${Math.max(18, box.heightRatio * canvasSize.height)}px`,
-                                    fontSize: `${Math.max(10, box.fontSize * 1.35)}px`,
-                                  }}
-                                  title={box.originalText}
-                                  type="button"
-                                >
-                                  {box.text}
-                                </button>
-                              ))}
+                              currentTextBoxes.map((box) => {
+                                const changed = box.text !== box.originalText;
+                                const selected = selectedPdfTextId === box.id;
+                                return (
+                                  <button
+                                    className={`absolute overflow-hidden rounded-sm border px-1 text-left leading-none ${
+                                      selected || changed
+                                        ? "border-[#f0b35a] bg-white/95 text-[#111827] ring-2 ring-[#f0b35a]"
+                                        : "border-transparent bg-[#e7f0ce]/10 text-transparent hover:border-[#1f6f67] hover:bg-[#e7f0ce]/40"
+                                    }`}
+                                    key={box.id}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setSelectedPdfTextId(box.id);
+                                      setEditText(box.text);
+                                    }}
+                                    style={{
+                                      left: `${box.xRatio * 100}%`,
+                                      top: `${box.yRatio * 100}%`,
+                                      width: `${box.widthRatio * 100}%`,
+                                      height: `${Math.max(18, box.heightRatio * canvasSize.height)}px`,
+                                      fontSize: `${Math.max(10, box.fontSize * 1.35)}px`,
+                                    }}
+                                    title={box.originalText}
+                                    type="button"
+                                  >
+                                    {box.text}
+                                  </button>
+                                );
+                              })}
                             {editMode === "visual" &&
                               visualTexts
                                 .filter((note) => note.pageMode === "all" || note.pageNumber === currentPage)
