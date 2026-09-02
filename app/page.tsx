@@ -30,6 +30,8 @@ type PdfTextBox = {
   text: string;
   xRatio: number;
   yRatio: number;
+  editXRatio?: number;
+  editYRatio?: number;
   widthRatio: number;
   heightRatio: number;
   fontSize: number;
@@ -430,6 +432,8 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
       .forEach((box) => {
         const x = box.xRatio * canvas.width;
         const y = box.yRatio * canvas.height;
+        const textX = (box.editXRatio ?? box.xRatio) * canvas.width;
+        const textY = (box.editYRatio ?? box.yRatio) * canvas.height;
         const width = Math.max(18, Math.max(box.widthRatio, 0.98 - box.xRatio) * canvas.width);
         const height = Math.max(box.fontSize * scale * 2.25, box.heightRatio * canvas.height * 2.1);
         context.fillStyle = "#ffffff";
@@ -441,7 +445,7 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
         context.shadowBlur = 1.2;
         context.shadowOffsetX = 0.4;
         context.shadowOffsetY = 0.7;
-        context.fillText(box.text || " ", x, y);
+        context.fillText(box.text || " ", textX, textY);
         context.shadowColor = "transparent";
         context.shadowBlur = 0;
         context.shadowOffsetX = 0;
@@ -522,10 +526,15 @@ function buildTextBoxes(
     }
   }
 
-  return lines.map((line) => ({
-    ...line,
-    text: existingBoxes.find((box) => box.id === line.id)?.text ?? line.text,
-  }));
+  return lines.map((line) => {
+    const existing = existingBoxes.find((box) => box.id === line.id);
+    return {
+      ...line,
+      text: existing?.text ?? line.text,
+      editXRatio: existing?.editXRatio,
+      editYRatio: existing?.editYRatio,
+    };
+  });
 }
 
 function escapeRegExp(value: string) {
@@ -888,8 +897,8 @@ export default function Home() {
         box.id === id
           ? {
               ...box,
-              xRatio: Math.max(0, Math.min(0.98, xRatio)),
-              yRatio: Math.max(0, Math.min(0.98, yRatio)),
+              editXRatio: Math.max(0, Math.min(0.98, xRatio)),
+              editYRatio: Math.max(0, Math.min(0.98, yRatio)),
             }
           : box,
       ),
@@ -1086,10 +1095,32 @@ export default function Home() {
                           >
                             <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
                             {editMode === "visual" &&
+                              currentTextBoxes
+                                .filter((box) => box.text !== box.originalText)
+                                .map((box) => {
+                                  const maskWidthRatio = Math.max(box.widthRatio, 0.98 - box.xRatio);
+                                  const maskHeight = Math.max(24, box.fontSize * 2.4, box.heightRatio * canvasSize.height * 2.1);
+                                  return (
+                                    <div
+                                      aria-hidden="true"
+                                      className="pointer-events-none absolute bg-white"
+                                      key={`${box.id}-mask`}
+                                      style={{
+                                        left: `${box.xRatio * 100}%`,
+                                        top: `${box.yRatio * 100}%`,
+                                        width: `${maskWidthRatio * 100}%`,
+                                        height: `${maskHeight}px`,
+                                      }}
+                                    />
+                                  );
+                                })}
+                            {editMode === "visual" &&
                               currentTextBoxes.map((box) => {
                                 const changed = box.text !== box.originalText;
                                 const selected = selectedPdfTextId === box.id;
-                                const displayWidthRatio = selected || changed ? Math.max(box.widthRatio, 0.98 - box.xRatio) : box.widthRatio;
+                                const displayXRatio = changed ? (box.editXRatio ?? box.xRatio) : box.xRatio;
+                                const displayYRatio = changed ? (box.editYRatio ?? box.yRatio) : box.yRatio;
+                                const displayWidthRatio = selected || changed ? Math.max(box.widthRatio, 0.98 - displayXRatio) : box.widthRatio;
                                 const displayHeight = selected || changed ? Math.max(24, box.fontSize * 2.4, box.heightRatio * canvasSize.height * 2.1) : Math.max(18, box.heightRatio * canvasSize.height);
                                 return (
                                   <div
@@ -1097,7 +1128,7 @@ export default function Home() {
                                       selected
                                         ? "border-[#f0b35a] bg-white text-[#111827] ring-2 ring-[#f0b35a]"
                                         : changed
-                                          ? "cursor-move touch-none border-transparent bg-white text-[#111827]"
+                                          ? "cursor-move touch-none border-transparent bg-transparent text-[#111827]"
                                           : "border-transparent bg-[#e7f0ce]/10 text-transparent hover:border-[#1f6f67] hover:bg-[#e7f0ce]/40"
                                     }`}
                                     key={box.id}
@@ -1149,8 +1180,8 @@ export default function Home() {
                                       }
                                     }}
                                     style={{
-                                      left: `${box.xRatio * 100}%`,
-                                      top: `${box.yRatio * 100}%`,
+                                      left: `${displayXRatio * 100}%`,
+                                      top: `${displayYRatio * 100}%`,
                                       width: `${displayWidthRatio * 100}%`,
                                       height: `${displayHeight}px`,
                                       fontSize: `${Math.max(10, box.fontSize * 1.35)}px`,
