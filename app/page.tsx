@@ -963,7 +963,7 @@ export default function Home() {
                           <div
                             className="relative mx-auto bg-white shadow-lg"
                             onClick={(event: MouseEvent<HTMLDivElement>) => {
-                              if (editMode === "visual" && currentTextBoxes.length === 0) addVisualText(event);
+                              if (editMode === "visual") addVisualText(event);
                             }}
                             style={{ width: canvasSize.width || 620, height: canvasSize.height || 820 }}
                           >
@@ -973,8 +973,8 @@ export default function Home() {
                                 const changed = box.text !== box.originalText;
                                 const selected = selectedPdfTextId === box.id;
                                 return (
-                                  <button
-                                    className={`absolute overflow-hidden rounded-sm border px-1 text-left leading-none ${
+                                  <div
+                                    className={`absolute overflow-hidden rounded-sm border ${
                                       selected || changed
                                         ? "border-[#f0b35a] bg-white/95 text-[#111827] ring-2 ring-[#f0b35a]"
                                         : "border-transparent bg-[#e7f0ce]/10 text-transparent hover:border-[#1f6f67] hover:bg-[#e7f0ce]/40"
@@ -993,10 +993,21 @@ export default function Home() {
                                       fontSize: `${Math.max(10, box.fontSize * 1.35)}px`,
                                     }}
                                     title={box.originalText}
-                                    type="button"
                                   >
-                                    {box.text}
-                                  </button>
+                                    {selected ? (
+                                      <textarea
+                                        autoFocus
+                                        className="h-full w-full resize-none border-0 bg-transparent px-1 py-0 leading-tight text-[#111827] outline-none"
+                                        onClick={(event) => event.stopPropagation()}
+                                        onChange={(event) => updateSelectedPdfText(event.target.value)}
+                                        value={box.text}
+                                      />
+                                    ) : (
+                                      <button className="h-full w-full px-1 py-0 text-left leading-tight" type="button">
+                                        {changed ? box.text : box.originalText}
+                                      </button>
+                                    )}
+                                  </div>
                                 );
                               })}
                             {editMode === "visual" &&
@@ -1074,11 +1085,8 @@ export default function Home() {
                   <>
                     {selectedPdfText ? (
                       <div className="rounded border border-[#1f6f67] bg-[#eef7f4] p-3 md:col-span-2">
-                        <label className="text-sm font-bold">
-                          编辑选中的 PDF 原文
-                          <textarea className="mt-2 min-h-24 w-full rounded border border-[#cfc6b7] px-3 py-2" value={selectedPdfText.text} onChange={(event) => updateSelectedPdfText(event.target.value)} />
-                        </label>
-                        <p className="mt-2 text-xs leading-5 text-[#4f5a55]">保存时会遮盖原位置文字，并把新文字写入同一位置。</p>
+                        <strong className="text-sm">正在页面上编辑文字</strong>
+                        <p className="mt-2 text-xs leading-5 text-[#4f5a55]">直接在左侧选中的文字框里输入，修改效果会立即显示在 PDF 页面上。</p>
                       </div>
                     ) : (
                       <div className="rounded border border-[#d8d1c3] bg-[#fbfaf6] p-3 md:col-span-2">
@@ -1087,7 +1095,7 @@ export default function Home() {
                       </div>
                     )}
                     <label className="text-sm font-bold md:col-span-2">
-                      额外添加文字
+                      新增文字内容
                       <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" value={editText} onChange={(event) => setEditText(event.target.value)} />
                     </label>
                     <label className="text-sm font-bold">
@@ -1117,7 +1125,7 @@ export default function Home() {
                       </div>
                     )}
                     <p className="rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12] md:col-span-2">
-                      Word 转出的文本型 PDF 会显示可点击文字框，可以直接选中修改。保存时会在原位置覆盖旧文字并写入新文字；复杂字体可能需要服务端增强版。
+                      点击已有文字后会在原位置变成输入框，可直接改并即时看到效果。若点击空白区域，可按“新增文字内容”在页面上放置新文字。
                     </p>
                   </>
                 ) : editMode === "replace" ? (
