@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, useMemo, useState } from "react";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { decodePDFRawStream, PDFDocument, PDFName, PDFRawStream, StandardFonts, rgb } from "pdf-lib";
 
 type ToolId = "compress" | "convert" | "image-pdf" | "pdf-merge" | "pdf-split" | "pdf-compress" | "pdf-edit";
 type ToolKind = "image" | "pdf";
@@ -64,9 +64,9 @@ const tools: Array<{
   {
     id: "pdf-edit",
     kind: "pdf",
-    title: "PDF 在线编辑",
-    tag: "添加文字",
-    description: "给 PDF 指定页或全部页面添加文字、签名备注或水印。",
+    title: "PDF 原文编辑",
+    tag: "替换文字",
+    description: "替换文本型 PDF 中可识别的原始文字，也支持添加批注文字。",
   },
 ];
 
@@ -117,6 +117,14 @@ async function readBytes(blob: Blob) {
 
 function textBytes(value: string) {
   return new TextEncoder().encode(value);
+}
+
+function latin1Bytes(value: string) {
+  const bytes = new Uint8Array(value.length);
+  for (let index = 0; index < value.length; index += 1) {
+    bytes[index] = value.charCodeAt(index) & 0xff;
+  }
+  return bytes;
 }
 
 async function imagesToPdf(files: File[]) {
@@ -247,6 +255,117 @@ async function editPdf(file: File, options: { text: string; pageMode: string; pa
   return new Blob([bytes], { type: "application/pdf" });
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function escapePdfLiteral(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+
+function replaceAllText(value: string, search: string, replacement: string) {
+  return value.replace(new RegExp(escapeRegExp(search), "g"), replacement);
+}
+
+function replacePdfLiteralStrings(content: string, search: string, replacement: string) {
+  let count = 0;
+  const literalSearch = escapePdfLiteral(search);
+  const literalReplacement = escapePdfLiteral(replacement);
+  const direct = replaceAllText(content, literalSearch, literalReplacement);
+
+  if (direct !== content) {
+    count += content.split(literalSearch).length - 1;
+    content = direct;
+  }
+
+  const charByChar = search
+    .split("")
+    .map((char) => escapePdfLiteral(char))
+    .join("\\)\\s*Tj\\s*\\(");
+  const charRegex = new RegExp(`\\(${charByChar}\\)`, "g");
+  content = content.replace(charRegex, () => {
+    count += 1;
+    return `(${literalReplacement})`;
+  });
+
+  return { content, count };
+}
+
+function replacePdfHexStrings(content: string, search: string, replacement: string) {
+  const utf8Bytes = new TextEncoder().encode(search);
+  const utf8ReplacementBytes = new TextEncoder().encode(replacement);
+  const utf16Bytes = new Uint8Array(search.length * 2);
+  const utf16ReplacementBytes = new Uint8Array(replacement.length * 2);
+  for (let index = 0; index < search.length; index += 1) {
+    const code = search.charCodeAt(index);
+    utf16Bytes[index * 2] = code >> 8;
+    utf16Bytes[index * 2 + 1] = code & 0xff;
+  }
+  for (let index = 0; index < replacement.length; index += 1) {
+    const code = replacement.charCodeAt(index);
+    utf16ReplacementBytes[index * 2] = code >> 8;
+    utf16ReplacementBytes[index * 2 + 1] = code & 0xff;
+  }
+
+  const pairs = [
+    [utf8Bytes, utf8ReplacementBytes],
+    [utf16Bytes, utf16ReplacementBytes],
+  ];
+  let count = 0;
+
+  for (const [bytes, replacementBytes] of pairs) {
+    const hexSearch = Array.from(bytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+    const hexReplacement = Array.from(replacementBytes)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+    const lowerMatches = content.split(hexSearch).length - 1;
+    const upperMatches = content.split(hexSearch.toUpperCase()).length - 1;
+    content = replaceAllText(content, hexSearch, hexReplacement);
+    content = replaceAllText(content, hexSearch.toUpperCase(), hexReplacement.toUpperCase());
+    count += lowerMatches + upperMatches;
+  }
+
+  return { content, count };
+}
+
+async function replaceOriginalPdfText(file: File, search: string, replacement: string) {
+  if (!search.trim()) throw new Error("请输入要查找的原文字。");
+  const pdf = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
+  let replacements = 0;
+
+  for (const [ref, object] of pdf.context.enumerateIndirectObjects()) {
+    if (!(object instanceof PDFRawStream)) continue;
+
+    try {
+      const decoded = decodePDFRawStream(object).decode();
+      const content = new TextDecoder("latin1").decode(decoded);
+      const literalResult = replacePdfLiteralStrings(content, search, replacement);
+      const hexResult = replacePdfHexStrings(literalResult.content, search, replacement);
+
+      if (hexResult.count > 0 || literalResult.count > 0) {
+        replacements += hexResult.count + literalResult.count;
+        const stream = pdf.context.flateStream(latin1Bytes(hexResult.content));
+        stream.dict.set(PDFName.of("Length"), pdf.context.obj(stream.getContentsSize()));
+        pdf.context.assign(ref, stream);
+      }
+    } catch {
+      // Some PDF streams are images, masks, or unsupported encodings. They are skipped.
+    }
+  }
+
+  if (replacements === 0) {
+    throw new Error("没有找到可直接替换的原文字。这个 PDF 可能是扫描件、中文复杂编码，或文字被拆成了特殊字形。");
+  }
+
+  const bytes = await pdf.save({ useObjectStreams: true });
+  return {
+    blob: new Blob([bytes], { type: "application/pdf" }),
+    replacements,
+  };
+}
+
 export default function Home() {
   const [activeTool, setActiveTool] = useState<ToolId>("compress");
   const [files, setFiles] = useState<File[]>([]);
@@ -254,6 +373,9 @@ export default function Home() {
   const [maxSide, setMaxSide] = useState(1600);
   const [format, setFormat] = useState("image/webp");
   const [editText, setEditText] = useState("Reviewed");
+  const [editMode, setEditMode] = useState("replace");
+  const [findText, setFindText] = useState("");
+  const [replaceText, setReplaceText] = useState("");
   const [editPageMode, setEditPageMode] = useState("all");
   const [editPageNumber, setEditPageNumber] = useState(1);
   const [editFontSize, setEditFontSize] = useState(22);
@@ -322,6 +444,13 @@ export default function Home() {
       }
 
       if (activeTool === "pdf-edit") {
+        if (editMode === "replace") {
+          const result = await replaceOriginalPdfText(files[0], findText, replaceText);
+          setOutputs([{ name: `${fileBaseName(files[0].name)}-text-edited.pdf`, size: result.blob.size, url: URL.createObjectURL(result.blob) }]);
+          setMessage(`已替换 ${result.replacements} 处原文，可以下载。`);
+          return;
+        }
+
         const pdf = await editPdf(files[0], {
           text: editText.trim() || "Reviewed",
           pageMode: editPageMode,
@@ -378,7 +507,7 @@ export default function Home() {
                 PDF 和图片，上传后就能处理。
               </h2>
               <p className="mt-5 max-w-xl text-lg leading-8 text-[#4f5a55]">
-                支持图片压缩、图片格式转换、图片转 PDF、PDF 合并、PDF 拆分、PDF 轻量压缩和 PDF 在线添加文字。
+                支持图片压缩、图片格式转换、图片转 PDF、PDF 合并、PDF 拆分、PDF 轻量压缩和文本型 PDF 原文替换。
               </p>
             </div>
 
@@ -392,8 +521,8 @@ export default function Home() {
                 <span className="text-[#66706c]">服务器留存</span>
               </div>
               <div className="border-t border-[#cfc6b7] pt-3">
-                <strong className="block text-2xl">1</strong>
-                <span className="text-[#66706c]">在线编辑项</span>
+                <strong className="block text-2xl">2</strong>
+                <span className="text-[#66706c]">编辑模式</span>
               </div>
             </div>
           </div>
@@ -445,24 +574,49 @@ export default function Home() {
             {activeTool === "pdf-edit" && (
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <label className="text-sm font-bold md:col-span-2">
-                  添加文字
-                  <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" value={editText} onChange={(event) => setEditText(event.target.value)} />
-                </label>
-                <label className="text-sm font-bold">
-                  页面
-                  <select className="mt-2 w-full rounded border border-[#cfc6b7] bg-white px-3 py-2" value={editPageMode} onChange={(event) => setEditPageMode(event.target.value)}>
-                    <option value="all">全部页面</option>
-                    <option value="single">指定页面</option>
+                  编辑模式
+                  <select className="mt-2 w-full rounded border border-[#cfc6b7] bg-white px-3 py-2" value={editMode} onChange={(event) => setEditMode(event.target.value)}>
+                    <option value="replace">替换 PDF 原文</option>
+                    <option value="annotation">添加批注文字</option>
                   </select>
                 </label>
-                <label className="text-sm font-bold">
-                  页码
-                  <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2 disabled:bg-[#eee8dd]" disabled={editPageMode === "all"} min="1" type="number" value={editPageNumber} onChange={(event) => setEditPageNumber(Number(event.target.value))} />
-                </label>
-                <label className="text-sm font-bold md:col-span-2">
-                  字号 {editFontSize}
-                  <input className="mt-2 w-full accent-[#1f6f67]" min="10" max="72" type="range" value={editFontSize} onChange={(event) => setEditFontSize(Number(event.target.value))} />
-                </label>
+                {editMode === "replace" ? (
+                  <>
+                    <label className="text-sm font-bold">
+                      查找原文字
+                      <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" placeholder="例如 Invoice" value={findText} onChange={(event) => setFindText(event.target.value)} />
+                    </label>
+                    <label className="text-sm font-bold">
+                      替换为
+                      <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" placeholder="例如 Receipt" value={replaceText} onChange={(event) => setReplaceText(event.target.value)} />
+                    </label>
+                    <p className="rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12] md:col-span-2">
+                      第一版支持文本型 PDF 中可直接识别的文字替换。扫描件、复杂中文字体编码、逐字拆分排版可能无法替换。
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <label className="text-sm font-bold md:col-span-2">
+                      添加文字
+                      <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" value={editText} onChange={(event) => setEditText(event.target.value)} />
+                    </label>
+                    <label className="text-sm font-bold">
+                      页面
+                      <select className="mt-2 w-full rounded border border-[#cfc6b7] bg-white px-3 py-2" value={editPageMode} onChange={(event) => setEditPageMode(event.target.value)}>
+                        <option value="all">全部页面</option>
+                        <option value="single">指定页面</option>
+                      </select>
+                    </label>
+                    <label className="text-sm font-bold">
+                      页码
+                      <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2 disabled:bg-[#eee8dd]" disabled={editPageMode === "all"} min="1" type="number" value={editPageNumber} onChange={(event) => setEditPageNumber(Number(event.target.value))} />
+                    </label>
+                    <label className="text-sm font-bold md:col-span-2">
+                      字号 {editFontSize}
+                      <input className="mt-2 w-full accent-[#1f6f67]" min="10" max="72" type="range" value={editFontSize} onChange={(event) => setEditFontSize(Number(event.target.value))} />
+                    </label>
+                  </>
+                )}
               </div>
             )}
 
