@@ -173,7 +173,7 @@ export default function Home() {
     const picked = Array.from(event.target.files ?? []);
     setFiles(picked);
     setOutputs([]);
-    setMessage(picked.length ? `已选择 ${picked.length} 个文件。` : "文件只在你的浏览器里处理。");
+    setMessage(picked.length ? `已选择 ${picked.length} 个文件，请点击下方按钮开始处理。` : "文件只在你的浏览器里处理。");
   }
 
   async function processFiles() {
@@ -269,11 +269,15 @@ export default function Home() {
               </span>
             </div>
 
-            <label className="grid min-h-48 cursor-pointer place-items-center rounded border-2 border-dashed border-[#b9afa0] bg-[#fbfaf6] p-6 text-center transition hover:border-[#1f6f67]">
+            <label className={`grid min-h-48 cursor-pointer place-items-center rounded border-2 border-dashed p-6 text-center transition hover:border-[#1f6f67] ${
+              files.length > 0 ? "border-[#1f6f67] bg-[#eef7f4]" : "border-[#b9afa0] bg-[#fbfaf6]"
+            }`}>
               <input className="sr-only" multiple type="file" accept="image/*" onChange={handleFiles} />
               <span>
-                <strong className="block text-xl">选择图片文件</strong>
-                <span className="mt-2 block text-sm text-[#66706c]">支持批量选择，当前不上云处理</span>
+                <strong className="block text-xl">{files.length > 0 ? `已选择 ${files.length} 个文件` : "选择图片文件"}</strong>
+                <span className="mt-2 block text-sm text-[#66706c]">
+                  {files.length > 0 ? "可以继续点这里重新选择，或点击下方按钮处理" : "支持批量选择，当前不上云处理"}
+                </span>
               </span>
             </label>
 
@@ -301,7 +305,7 @@ export default function Home() {
               disabled={!ready || busy}
               onClick={processFiles}
             >
-              {busy ? "处理中..." : selectedTool.status === "ready" ? "开始处理" : "准备接入服务端引擎"}
+              {busy ? "处理中..." : selectedTool.status === "ready" ? (files.length > 0 ? "处理已选择文件" : "先选择图片文件") : "准备接入服务端引擎"}
             </button>
 
             <p className="mt-3 text-sm text-[#66706c]">{message}</p>
@@ -350,7 +354,7 @@ export default function Home() {
               onClick={() => {
                 setActiveTool(tool.id);
                 setOutputs([]);
-                setMessage(tool.status === "ready" ? "文件只在你的浏览器里处理。" : "这个工具需要服务端处理引擎，下一阶段接入。");
+                setMessage(tool.status === "ready" ? "选择图片后，再点击处理按钮生成下载文件。" : "这个工具需要服务端处理引擎，下一阶段接入。");
               }}
             >
               <span className="mb-4 inline-flex rounded bg-[#e7f0ce] px-2 py-1 text-xs font-black text-[#3d5621]">{tool.tag}</span>
