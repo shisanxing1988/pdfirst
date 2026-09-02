@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { decodePDFRawStream, PDFDocument, PDFName, PDFRawStream, StandardFonts, rgb } from "pdf-lib";
 
 type ToolId = "compress" | "convert" | "image-pdf" | "pdf-merge" | "pdf-split" | "pdf-compress" | "pdf-edit";
@@ -19,6 +19,18 @@ type VisualText = {
   yRatio: number;
   pageMode: string;
   pageNumber: number;
+  fontSize: number;
+};
+
+type PdfTextBox = {
+  id: string;
+  pageNumber: number;
+  originalText: string;
+  text: string;
+  xRatio: number;
+  yRatio: number;
+  widthRatio: number;
+  heightRatio: number;
   fontSize: number;
 };
 
@@ -290,6 +302,45 @@ async function saveVisualPdfEdits(file: File, notes: VisualText[]) {
   return new Blob([bytes], { type: "application/pdf" });
 }
 
+async function saveSelectedTextEdits(file: File, boxes: PdfTextBox[]) {
+  const changed = boxes.filter((box) => box.text !== box.originalText);
+  if (changed.length === 0) throw new Error("请先点击 PDF 里的文字并修改内容。");
+
+  const pdf = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const pages = pdf.getPages();
+
+  changed.forEach((box) => {
+    const page = pages[box.pageNumber - 1];
+    if (!page) return;
+    const { width, height } = page.getSize();
+    const x = box.xRatio * width;
+    const top = box.yRatio * height;
+    const rectWidth = Math.max(16, box.widthRatio * width);
+    const rectHeight = Math.max(box.fontSize * 1.25, box.heightRatio * height);
+    const y = height - top - rectHeight;
+
+    page.drawRectangle({
+      x: Math.max(0, x - 1),
+      y: Math.max(0, y - 2),
+      width: Math.min(width - x, rectWidth + 8),
+      height: rectHeight + 4,
+      color: rgb(1, 1, 1),
+      opacity: 1,
+    });
+    page.drawText(box.text || " ", {
+      x,
+      y: Math.max(0, y + 2),
+      size: Math.max(8, Math.min(72, box.fontSize)),
+      font,
+      color: rgb(0.05, 0.08, 0.08),
+    });
+  });
+
+  const bytes = await pdf.save({ useObjectStreams: true });
+  return new Blob([bytes], { type: "application/pdf" });
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -417,15 +468,91 @@ export default function Home() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [visualTexts, setVisualTexts] = useState<VisualText[]>([]);
   const [selectedTextId, setSelectedTextId] = useState("");
+  const [pdfTextBoxes, setPdfTextBoxes] = useState<PdfTextBox[]>([]);
+  const [selectedPdfTextId, setSelectedPdfTextId] = useState("");
+  const [pdfPageCount, setPdfPageCount] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [outputs, setOutputs] = useState<OutputFile[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("文件只在你的浏览器里处理。");
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const selectedTool = useMemo(() => tools.find((tool) => tool.id === activeTool) ?? tools[0], [activeTool]);
   const isPdfTool = selectedTool.kind === "pdf";
   const selectedVisualText = visualTexts.find((note) => note.id === selectedTextId);
+  const currentTextBoxes = pdfTextBoxes.filter((box) => box.pageNumber === currentPage);
+  const selectedPdfText = pdfTextBoxes.find((box) => box.id === selectedPdfTextId);
   const ready = files.length > 0;
   const accept = isPdfTool ? "application/pdf,.pdf" : "image/*";
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function renderPdfPage() {
+      if (!files[0] || activeTool !== "pdf-edit" || editMode !== "visual") return;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+
+      try {
+        const pdfjsLib = await import("pdfjs-dist");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
+        const data = await files[0].arrayBuffer();
+        const documentTask = pdfjsLib.getDocument({ data });
+        const pdf = await documentTask.promise;
+        const pageNumber = Math.max(1, Math.min(currentPage, pdf.numPages));
+        const page = await pdf.getPage(pageNumber);
+        const viewport = page.getViewport({ scale: 1.35 });
+        const context = canvas.getContext("2d");
+
+        if (!context || cancelled) return;
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        setCanvasSize({ width: viewport.width, height: viewport.height });
+        setPdfPageCount(pdf.numPages);
+        await page.render({ canvas, canvasContext: context, viewport }).promise;
+
+        const textContent = await page.getTextContent();
+        const nextBoxes = textContent.items
+          .filter((item): item is typeof item & { str: string; transform: number[]; width: number; height: number } => "str" in item && Boolean(item.str.trim()))
+          .map((item, index) => {
+            const transform = pdfjsLib.Util.transform(viewport.transform, item.transform);
+            const fontHeight = Math.max(10, Math.hypot(transform[2], transform[3]));
+            const x = transform[4];
+            const y = transform[5] - fontHeight;
+            const width = Math.max(item.width * 1.35, item.str.length * fontHeight * 0.45);
+            const height = Math.max(item.height * 1.35, fontHeight);
+
+            return {
+              id: `${pageNumber}-${index}-${item.str}`,
+              pageNumber,
+              originalText: item.str,
+              text: pdfTextBoxes.find((box) => box.id === `${pageNumber}-${index}-${item.str}`)?.text ?? item.str,
+              xRatio: Math.max(0, Math.min(1, x / viewport.width)),
+              yRatio: Math.max(0, Math.min(1, y / viewport.height)),
+              widthRatio: Math.max(0.01, Math.min(1, width / viewport.width)),
+              heightRatio: Math.max(0.01, Math.min(1, height / viewport.height)),
+              fontSize: Math.max(8, Math.round(fontHeight / 1.35)),
+            };
+          });
+
+        if (!cancelled) {
+          setPdfTextBoxes((current) => [
+            ...current.filter((box) => box.pageNumber !== pageNumber),
+            ...nextBoxes,
+          ]);
+          setMessage("PDF 已打开。点击页面上的文字块即可编辑。");
+        }
+      } catch (error) {
+        if (!cancelled) setMessage(error instanceof Error ? error.message : "PDF 渲染失败，请换个文件试试。");
+      }
+    }
+
+    renderPdfPage();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTool, currentPage, editMode, files]);
 
   function clearOutputs() {
     setOutputs((current) => {
@@ -448,6 +575,10 @@ export default function Home() {
     clearPreview();
     setVisualTexts([]);
     setSelectedTextId("");
+    setPdfTextBoxes([]);
+    setSelectedPdfTextId("");
+    setPdfPageCount(0);
+    setCurrentPage(1);
     if (picked.length > 0 && selectedTool.kind === "pdf") {
       setPreviewUrl(URL.createObjectURL(picked[0]));
     }
@@ -467,6 +598,10 @@ export default function Home() {
     clearPreview();
     setVisualTexts([]);
     setSelectedTextId("");
+    setPdfTextBoxes([]);
+    setSelectedPdfTextId("");
+    setPdfPageCount(0);
+    setCurrentPage(1);
     setMessage("选择文件后，再点击处理按钮生成下载文件。");
   }
 
@@ -495,6 +630,10 @@ export default function Home() {
     setVisualTexts((current) => current.filter((note) => note.id !== selectedTextId));
     setSelectedTextId("");
     setMessage("已删除选中的文字标记。");
+  }
+
+  function updateSelectedPdfText(text: string) {
+    setPdfTextBoxes((current) => current.map((box) => (box.id === selectedPdfTextId ? { ...box, text } : box)));
   }
 
   async function processFiles() {
@@ -533,12 +672,13 @@ export default function Home() {
 
       if (activeTool === "pdf-edit") {
         if (editMode === "visual") {
-          const pdf = await saveVisualPdfEdits(files[0], visualTexts);
+          const editedTextBoxes = pdfTextBoxes.filter((box) => box.text !== box.originalText);
+          const pdf = editedTextBoxes.length > 0 ? await saveSelectedTextEdits(files[0], pdfTextBoxes) : await saveVisualPdfEdits(files[0], visualTexts);
           const outputUrl = URL.createObjectURL(pdf);
           setOutputs([{ name: `${fileBaseName(files[0].name)}-visual-edited.pdf`, size: pdf.size, url: outputUrl }]);
           clearPreview();
           setPreviewUrl(outputUrl);
-          setMessage("PDF 已保存，新文件已在左侧预览，可以下载。");
+          setMessage(editedTextBoxes.length > 0 ? "文字块编辑已保存，新文件已在左侧预览，可以下载。" : "PDF 已保存，新文件已在左侧预览，可以下载。");
           return;
         }
 
@@ -659,32 +799,78 @@ export default function Home() {
                 {activeTool === "pdf-edit" && (
                   <div className="mt-4 overflow-hidden rounded border border-[#d8d1c3] bg-[#252a29]">
                     {previewUrl ? (
-                      <div className="relative h-[560px] w-full">
-                        <iframe className="h-full w-full bg-white pointer-events-none" src={`${previewUrl}#toolbar=0&navpanes=0`} title="PDF 在线预览" />
-                        {editMode === "visual" && (
-                          <div aria-label="PDF 可视化编辑层" className="absolute inset-0 cursor-crosshair" onClick={addVisualText}>
-                            {visualTexts.map((note) => (
-                              <button
-                                className={`absolute max-w-56 -translate-y-1/2 rounded border bg-white/90 px-2 py-1 text-left font-bold text-[#1f6f67] shadow-sm ${
-                                  selectedTextId === note.id ? "border-[#f0b35a] ring-2 ring-[#f0b35a]" : "border-[#1f6f67]"
-                                }`}
-                                key={note.id}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setSelectedTextId(note.id);
-                                }}
-                                style={{
-                                  left: `${note.xRatio * 100}%`,
-                                  top: `${note.yRatio * 100}%`,
-                                  fontSize: `${Math.min(24, Math.max(12, note.fontSize * 0.72))}px`,
-                                }}
-                                type="button"
-                              >
-                                {note.text}
-                              </button>
-                            ))}
+                      <div>
+                        <div className="flex items-center justify-between gap-3 bg-[#18201f] px-3 py-2 text-sm text-white">
+                          <button className="rounded border border-white/30 px-3 py-1 font-bold disabled:opacity-40" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} type="button">
+                            上一页
+                          </button>
+                          <span>
+                            第 {currentPage} 页 / 共 {pdfPageCount || 1} 页
+                          </span>
+                          <button className="rounded border border-white/30 px-3 py-1 font-bold disabled:opacity-40" disabled={pdfPageCount > 0 && currentPage >= pdfPageCount} onClick={() => setCurrentPage((page) => Math.min(pdfPageCount || page + 1, page + 1))} type="button">
+                            下一页
+                          </button>
+                        </div>
+                        <div className="h-[560px] overflow-auto bg-[#252a29] p-4">
+                          <div
+                            className="relative mx-auto bg-white shadow-lg"
+                            onClick={(event: MouseEvent<HTMLDivElement>) => {
+                              if (editMode === "visual" && currentTextBoxes.length === 0) addVisualText(event);
+                            }}
+                            style={{ width: canvasSize.width || 620, height: canvasSize.height || 820 }}
+                          >
+                            <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+                            {editMode === "visual" &&
+                              currentTextBoxes.map((box) => (
+                                <button
+                                  className={`absolute overflow-hidden rounded-sm border px-1 text-left leading-none ${
+                                    selectedPdfTextId === box.id ? "border-[#f0b35a] bg-[#fff4dc]/80" : "border-transparent bg-[#e7f0ce]/20 hover:border-[#1f6f67] hover:bg-[#e7f0ce]/60"
+                                  }`}
+                                  key={box.id}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setSelectedPdfTextId(box.id);
+                                    setEditText(box.text);
+                                  }}
+                                  style={{
+                                    left: `${box.xRatio * 100}%`,
+                                    top: `${box.yRatio * 100}%`,
+                                    width: `${box.widthRatio * 100}%`,
+                                    height: `${Math.max(18, box.heightRatio * canvasSize.height)}px`,
+                                    fontSize: `${Math.max(10, box.fontSize * 1.35)}px`,
+                                  }}
+                                  title={box.originalText}
+                                  type="button"
+                                >
+                                  {box.text}
+                                </button>
+                              ))}
+                            {editMode === "visual" &&
+                              visualTexts
+                                .filter((note) => note.pageMode === "all" || note.pageNumber === currentPage)
+                                .map((note) => (
+                                  <button
+                                    className={`absolute max-w-56 -translate-y-1/2 rounded border bg-white/90 px-2 py-1 text-left font-bold text-[#1f6f67] shadow-sm ${
+                                      selectedTextId === note.id ? "border-[#f0b35a] ring-2 ring-[#f0b35a]" : "border-[#1f6f67]"
+                                    }`}
+                                    key={note.id}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setSelectedTextId(note.id);
+                                      setSelectedPdfTextId("");
+                                    }}
+                                    style={{
+                                      left: `${note.xRatio * 100}%`,
+                                      top: `${note.yRatio * 100}%`,
+                                      fontSize: `${Math.min(24, Math.max(12, note.fontSize * 0.72))}px`,
+                                    }}
+                                    type="button"
+                                  >
+                                    {note.text}
+                                  </button>
+                                ))}
                           </div>
-                        )}
+                        </div>
                       </div>
                     ) : (
                       <div className="grid h-[560px] place-items-center px-6 text-center text-white">
@@ -732,8 +918,22 @@ export default function Home() {
                 </label>
                 {editMode === "visual" ? (
                   <>
+                    {selectedPdfText ? (
+                      <div className="rounded border border-[#1f6f67] bg-[#eef7f4] p-3 md:col-span-2">
+                        <label className="text-sm font-bold">
+                          编辑选中的 PDF 原文
+                          <textarea className="mt-2 min-h-24 w-full rounded border border-[#cfc6b7] px-3 py-2" value={selectedPdfText.text} onChange={(event) => updateSelectedPdfText(event.target.value)} />
+                        </label>
+                        <p className="mt-2 text-xs leading-5 text-[#4f5a55]">保存时会遮盖原位置文字，并把新文字写入同一位置。</p>
+                      </div>
+                    ) : (
+                      <div className="rounded border border-[#d8d1c3] bg-[#fbfaf6] p-3 md:col-span-2">
+                        <strong className="text-sm">点击左侧 PDF 页面中的文字块开始编辑</strong>
+                        <p className="mt-2 text-xs leading-5 text-[#66706c]">如果页面没有出现文字框，说明这个 PDF 可能是扫描件或文字编码过于复杂。</p>
+                      </div>
+                    )}
                     <label className="text-sm font-bold md:col-span-2">
-                      要添加的文字
+                      额外添加文字
                       <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" value={editText} onChange={(event) => setEditText(event.target.value)} />
                     </label>
                     <label className="text-sm font-bold">
@@ -763,7 +963,7 @@ export default function Home() {
                       </div>
                     )}
                     <p className="rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12] md:col-span-2">
-                      点击左侧 PDF 预览位置即可放入文字；保存后会生成新 PDF。当前可视化编辑写入的是文字层，不会直接改掉底层原文。
+                      Word 转出的文本型 PDF 会显示可点击文字框，可以直接选中修改。保存时会在原位置覆盖旧文字并写入新文字；复杂字体可能需要服务端增强版。
                     </p>
                   </>
                 ) : editMode === "replace" ? (
