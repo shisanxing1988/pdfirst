@@ -1060,9 +1060,11 @@ export default function Home() {
                                 return (
                                   <div
                                     className={`absolute overflow-hidden rounded-sm border ${
-                                      selected || changed
+                                      selected
                                         ? "border-[#f0b35a] bg-white/95 text-[#111827] ring-2 ring-[#f0b35a]"
-                                        : "border-transparent bg-[#e7f0ce]/10 text-transparent hover:border-[#1f6f67] hover:bg-[#e7f0ce]/40"
+                                        : changed
+                                          ? "border-transparent bg-white/95 text-[#111827]"
+                                          : "border-transparent bg-[#e7f0ce]/10 text-transparent hover:border-[#1f6f67] hover:bg-[#e7f0ce]/40"
                                     }`}
                                     key={box.id}
                                     onClick={(event) => {
