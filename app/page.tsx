@@ -10,6 +10,7 @@ type OutputFile = {
   name: string;
   size: number;
   url: string;
+  blob: Blob;
 };
 
 type VisualText = {
@@ -301,6 +302,7 @@ async function splitPdf(file: File[]) {
       name: `${fileBaseName(sourceFile.name)}-page-${pageIndex + 1}.pdf`,
       size: blob.size,
       url: URL.createObjectURL(blob),
+      blob,
     });
   }
 
@@ -716,6 +718,65 @@ export default function Home() {
     });
   }
 
+  function updateOutputName(url: string, name: string) {
+    setOutputs((current) => current.map((output) => (output.url === url ? { ...output, name } : output)));
+  }
+
+  async function saveOutputFile(output: OutputFile) {
+    const fileName = output.name.trim() || "download";
+    const windowWithPicker = window as Window & {
+      showSaveFilePicker?: (options?: {
+        suggestedName?: string;
+        types?: Array<{
+          description: string;
+          accept: Record<string, string[]>;
+        }>;
+      }) => Promise<{
+        createWritable: () => Promise<{
+          write: (data: Blob) => Promise<void>;
+          close: () => Promise<void>;
+        }>;
+      }>;
+    };
+
+    if (windowWithPicker.showSaveFilePicker) {
+      try {
+        const extension = fileName.includes(".") ? `.${fileName.split(".").pop()}` : "";
+        const mimeType = output.blob.type || "application/octet-stream";
+        const handle = await windowWithPicker.showSaveFilePicker({
+          suggestedName: fileName,
+          types: extension
+            ? [
+                {
+                  description: "处理后的文件",
+                  accept: { [mimeType]: [extension] },
+                },
+              ]
+            : undefined,
+        });
+        const writable = await handle.createWritable();
+        await writable.write(output.blob);
+        await writable.close();
+        setMessage(`已保存：${fileName}`);
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          setMessage("已取消保存。");
+          return;
+        }
+        setMessage("当前浏览器不能选择保存路径，已切换为手动下载。");
+      }
+    }
+
+    const link = document.createElement("a");
+    link.href = output.url;
+    link.download = fileName;
+    link.rel = "noopener";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
   function handleFiles(event: ChangeEvent<HTMLInputElement>) {
     const picked = Array.from(event.target.files ?? []);
     setFiles(picked);
@@ -792,15 +853,15 @@ export default function Home() {
     try {
       if (activeTool === "image-pdf") {
         const pdf = await imagesToPdf(files);
-        setOutputs([{ name: "images.pdf", size: pdf.size, url: URL.createObjectURL(pdf) }]);
-        setMessage("PDF 已生成，可以下载。");
+        setOutputs([{ name: "images.pdf", size: pdf.size, url: URL.createObjectURL(pdf), blob: pdf }]);
+        setMessage("PDF 已生成。可先改文件名，再手动保存。");
         return;
       }
 
       if (activeTool === "pdf-merge") {
         const pdf = await mergePdfs(files);
-        setOutputs([{ name: "merged.pdf", size: pdf.size, url: URL.createObjectURL(pdf) }]);
-        setMessage("PDF 已合并，可以下载。");
+        setOutputs([{ name: "merged.pdf", size: pdf.size, url: URL.createObjectURL(pdf), blob: pdf }]);
+        setMessage("PDF 已合并。可先改文件名，再手动保存。");
         return;
       }
 
@@ -813,8 +874,8 @@ export default function Home() {
 
       if (activeTool === "pdf-compress") {
         const pdf = await optimizePdf(files[0]);
-        setOutputs([{ name: `${fileBaseName(files[0].name)}-optimized.pdf`, size: pdf.size, url: URL.createObjectURL(pdf) }]);
-        setMessage("PDF 已重新优化结构，可以下载。扫描件深度压缩需要下一阶段服务端引擎。");
+        setOutputs([{ name: `${fileBaseName(files[0].name)}-optimized.pdf`, size: pdf.size, url: URL.createObjectURL(pdf), blob: pdf }]);
+        setMessage("PDF 已重新优化结构。可先改文件名，再手动保存。扫描件深度压缩需要下一阶段服务端引擎。");
         return;
       }
 
@@ -823,20 +884,20 @@ export default function Home() {
           const editedTextBoxes = pdfTextBoxes.filter((box) => box.text !== box.originalText);
           const pdf = await saveVisualEditorPdf(files[0], pdfTextBoxes, visualTexts);
           const outputUrl = URL.createObjectURL(pdf);
-          setOutputs([{ name: `${fileBaseName(files[0].name)}-visual-edited.pdf`, size: pdf.size, url: outputUrl }]);
+          setOutputs([{ name: `${fileBaseName(files[0].name)}-visual-edited.pdf`, size: pdf.size, url: outputUrl, blob: pdf }]);
           clearPreview();
           setPreviewUrl(outputUrl);
-          setMessage(editedTextBoxes.length > 0 ? "文字块编辑已保存，新文件已在左侧预览，可以下载。" : "PDF 已保存，新文件已在左侧预览，可以下载。");
+          setMessage(editedTextBoxes.length > 0 ? "文字块编辑已生成，新文件已在左侧预览。可先改文件名，再手动保存。" : "PDF 已生成，新文件已在左侧预览。可先改文件名，再手动保存。");
           return;
         }
 
         if (editMode === "replace") {
           const result = await replaceOriginalPdfText(files[0], findText, replaceText);
           const outputUrl = URL.createObjectURL(result.blob);
-          setOutputs([{ name: `${fileBaseName(files[0].name)}-text-edited.pdf`, size: result.blob.size, url: outputUrl }]);
+          setOutputs([{ name: `${fileBaseName(files[0].name)}-text-edited.pdf`, size: result.blob.size, url: outputUrl, blob: result.blob }]);
           clearPreview();
           setPreviewUrl(outputUrl);
-          setMessage(`已替换 ${result.replacements} 处原文，可以下载。`);
+          setMessage(`已替换 ${result.replacements} 处原文。可先改文件名，再手动保存。`);
           return;
         }
 
@@ -847,10 +908,10 @@ export default function Home() {
           fontSize: editFontSize,
         });
         const outputUrl = URL.createObjectURL(pdf);
-        setOutputs([{ name: `${fileBaseName(files[0].name)}-edited.pdf`, size: pdf.size, url: outputUrl }]);
+        setOutputs([{ name: `${fileBaseName(files[0].name)}-edited.pdf`, size: pdf.size, url: outputUrl, blob: pdf }]);
         clearPreview();
         setPreviewUrl(outputUrl);
-        setMessage("PDF 已添加文字，可以下载。");
+        setMessage("PDF 已添加文字。可先改文件名，再手动保存。");
         return;
       }
 
@@ -864,10 +925,11 @@ export default function Home() {
           name: `${fileBaseName(file.name)}.${extension}`,
           size: blob.size,
           url: URL.createObjectURL(blob),
+          blob,
         });
       }
       setOutputs(nextOutputs);
-      setMessage(`处理完成：${nextOutputs.length} 个文件。`);
+      setMessage(`处理完成：${nextOutputs.length} 个文件。可先改文件名，再手动保存。`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "处理失败，请换个文件试试。");
     } finally {
@@ -1194,12 +1256,24 @@ export default function Home() {
               </div>
             )}
             {outputs.length > 0 && (
-              <div className="mt-4 max-h-44 overflow-auto rounded bg-[#eef7f4] p-3">
+              <div className="mt-4 max-h-60 overflow-auto rounded bg-[#eef7f4] p-3">
                 {outputs.map((output) => (
-                  <a className="flex justify-between gap-4 border-b border-[#d6ebe3] py-2 font-bold text-[#15534d] last:border-b-0" download={output.name} href={output.url} key={output.url}>
-                    <span className="truncate">下载 {output.name}</span>
-                    <span>{prettySize(output.size)}</span>
-                  </a>
+                  <div className="grid gap-2 border-b border-[#d6ebe3] py-3 last:border-b-0" key={output.url}>
+                    <label className="text-xs font-bold text-[#4f5a55]">
+                      文件名
+                      <input
+                        className="mt-1 w-full rounded border border-[#b9d6cd] bg-white px-3 py-2 text-sm font-bold text-[#15534d] outline-none focus:border-[#1f6f67]"
+                        onChange={(event) => updateOutputName(output.url, event.target.value)}
+                        value={output.name}
+                      />
+                    </label>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm text-[#66706c]">{prettySize(output.size)}</span>
+                      <button className="rounded bg-[#1f6f67] px-4 py-2 text-sm font-black text-white hover:bg-[#15534d]" onClick={() => saveOutputFile(output)} type="button">
+                        保存
+                      </button>
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
