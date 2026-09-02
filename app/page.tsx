@@ -639,6 +639,7 @@ export default function Home() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [visualTexts, setVisualTexts] = useState<VisualText[]>([]);
   const [selectedTextId, setSelectedTextId] = useState("");
+  const [placingText, setPlacingText] = useState(false);
   const [pdfTextBoxes, setPdfTextBoxes] = useState<PdfTextBox[]>([]);
   const [selectedPdfTextId, setSelectedPdfTextId] = useState("");
   const [pdfPageCount, setPdfPageCount] = useState(0);
@@ -648,6 +649,7 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("文件只在你的浏览器里处理。");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const dragTextRef = useRef<{ id: string; dx: number; dy: number; height: number; moved: boolean } | null>(null);
 
   const selectedTool = useMemo(() => tools.find((tool) => tool.id === activeTool) ?? tools[0], [activeTool]);
   const isPdfTool = selectedTool.kind === "pdf";
@@ -784,6 +786,7 @@ export default function Home() {
     clearPreview();
     setVisualTexts([]);
     setSelectedTextId("");
+    setPlacingText(false);
     setPdfTextBoxes([]);
     setSelectedPdfTextId("");
     setPdfPageCount(0);
@@ -807,6 +810,7 @@ export default function Home() {
     clearPreview();
     setVisualTexts([]);
     setSelectedTextId("");
+    setPlacingText(false);
     setPdfTextBoxes([]);
     setSelectedPdfTextId("");
     setPdfPageCount(0);
@@ -815,7 +819,7 @@ export default function Home() {
   }
 
   function addVisualText(event: React.MouseEvent<HTMLDivElement>) {
-    if (!previewUrl || activeTool !== "pdf-edit" || editMode !== "visual") return;
+    if (!previewUrl || activeTool !== "pdf-edit" || editMode !== "visual" || !placingText) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const note: VisualText = {
       id: crypto.randomUUID(),
@@ -829,10 +833,25 @@ export default function Home() {
     setVisualTexts((current) => [...current, note]);
     setSelectedTextId(note.id);
     setMessage("已在页面上添加文字。可以继续点击添加，或保存为新 PDF。");
+    setPlacingText(false);
   }
 
   function updateSelectedText(updates: Partial<VisualText>) {
     setVisualTexts((current) => current.map((note) => (note.id === selectedTextId ? { ...note, ...updates } : note)));
+  }
+
+  function moveVisualText(id: string, xRatio: number, yRatio: number) {
+    setVisualTexts((current) =>
+      current.map((note) =>
+        note.id === id
+          ? {
+              ...note,
+              xRatio: Math.max(0, Math.min(1, xRatio)),
+              yRatio: Math.max(0, Math.min(1, yRatio)),
+            }
+          : note,
+      ),
+    );
   }
 
   function removeSelectedText() {
@@ -1023,9 +1042,9 @@ export default function Home() {
                         </div>
                         <div className="h-[560px] overflow-auto bg-[#252a29] p-4">
                           <div
-                            className="relative mx-auto bg-white shadow-lg"
+                            className={`relative mx-auto bg-white shadow-lg ${placingText ? "cursor-crosshair" : ""}`}
                             onClick={(event: MouseEvent<HTMLDivElement>) => {
-                              if (editMode === "visual") addVisualText(event);
+                              if (editMode === "visual" && placingText) addVisualText(event);
                             }}
                             style={{ width: canvasSize.width || 620, height: canvasSize.height || 820 }}
                           >
@@ -1077,7 +1096,7 @@ export default function Home() {
                                 .filter((note) => note.pageMode === "all" || note.pageNumber === currentPage)
                                 .map((note) => (
                                   <button
-                                    className={`absolute max-w-56 -translate-y-1/2 rounded border bg-white/90 px-2 py-1 text-left font-bold text-[#1f6f67] shadow-sm ${
+                                    className={`absolute max-w-56 touch-none -translate-y-1/2 cursor-move rounded border bg-white/90 px-2 py-1 text-left font-bold text-[#1f6f67] shadow-sm ${
                                       selectedTextId === note.id ? "border-[#f0b35a] ring-2 ring-[#f0b35a]" : "border-[#1f6f67]"
                                     }`}
                                     key={note.id}
@@ -1085,6 +1104,44 @@ export default function Home() {
                                       event.stopPropagation();
                                       setSelectedTextId(note.id);
                                       setSelectedPdfTextId("");
+                                    }}
+                                    onPointerDown={(event) => {
+                                      event.stopPropagation();
+                                      const parent = event.currentTarget.parentElement;
+                                      if (!parent) return;
+                                      const box = event.currentTarget.getBoundingClientRect();
+                                      event.currentTarget.setPointerCapture(event.pointerId);
+                                      dragTextRef.current = {
+                                        id: note.id,
+                                        dx: event.clientX - box.left,
+                                        dy: event.clientY - box.top,
+                                        height: box.height,
+                                        moved: false,
+                                      };
+                                      setSelectedTextId(note.id);
+                                      setSelectedPdfTextId("");
+                                    }}
+                                    onPointerMove={(event) => {
+                                      const drag = dragTextRef.current;
+                                      const parent = event.currentTarget.parentElement;
+                                      if (!drag || drag.id !== note.id || !parent) return;
+                                      const parentBox = parent.getBoundingClientRect();
+                                      drag.moved = true;
+                                      moveVisualText(
+                                        note.id,
+                                        (event.clientX - parentBox.left - drag.dx) / parentBox.width,
+                                        (event.clientY - parentBox.top - drag.dy + drag.height / 2) / parentBox.height,
+                                      );
+                                    }}
+                                    onPointerUp={(event) => {
+                                      const drag = dragTextRef.current;
+                                      if (drag?.id === note.id) {
+                                        if (drag.moved) setMessage("文字框位置已调整。");
+                                        dragTextRef.current = null;
+                                      }
+                                      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                                        event.currentTarget.releasePointerCapture(event.pointerId);
+                                      }
                                     }}
                                     style={{
                                       left: `${note.xRatio * 100}%`,
@@ -1160,6 +1217,19 @@ export default function Home() {
                       新增文字内容
                       <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" value={editText} onChange={(event) => setEditText(event.target.value)} />
                     </label>
+                    <button
+                      className={`rounded px-4 py-2 text-sm font-black md:col-span-2 ${
+                        placingText ? "bg-[#f0b35a] text-[#3a2404]" : "bg-[#1f6f67] text-white hover:bg-[#15534d]"
+                      }`}
+                      onClick={() => {
+                        setPlacingText((current) => !current);
+                        setSelectedPdfTextId("");
+                        setMessage(placingText ? "已取消添加文字。" : "请在左侧 PDF 页面上点击要放置文字的位置。");
+                      }}
+                      type="button"
+                    >
+                      {placingText ? "取消添加文字" : "添加文字到页面"}
+                    </button>
                     <label className="text-sm font-bold">
                       页面
                       <select className="mt-2 w-full rounded border border-[#cfc6b7] bg-white px-3 py-2" value={editPageMode} onChange={(event) => setEditPageMode(event.target.value)}>
@@ -1187,7 +1257,7 @@ export default function Home() {
                       </div>
                     )}
                     <p className="rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12] md:col-span-2">
-                      点击已有文字后会在原位置变成输入框，可直接改并即时看到效果。若点击空白区域，可按“新增文字内容”在页面上放置新文字。
+                      点击已有文字后会在原位置变成输入框，可直接改并即时看到效果。需要添加新文字时，先点“添加文字到页面”，再点 PDF 页面位置；已添加的文字框可以拖动。
                     </p>
                   </>
                 ) : editMode === "replace" ? (
