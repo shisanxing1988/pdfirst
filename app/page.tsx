@@ -437,7 +437,15 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
         context.fillStyle = "#111827";
         context.font = `${Math.max(10, Math.round(box.fontSize * scale))}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
         context.textBaseline = "top";
+        context.shadowColor = "rgba(17, 24, 39, 0.28)";
+        context.shadowBlur = 1.2;
+        context.shadowOffsetX = 0.4;
+        context.shadowOffsetY = 0.7;
         context.fillText(box.text || " ", x, y);
+        context.shadowColor = "transparent";
+        context.shadowBlur = 0;
+        context.shadowOffsetX = 0;
+        context.shadowOffsetY = 0;
       });
 
     notes
@@ -446,7 +454,15 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
         context.fillStyle = "#1f6f67";
         context.font = `700 ${Math.max(10, Math.round(note.fontSize * scale))}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
         context.textBaseline = "top";
+        context.shadowColor = "rgba(31, 111, 103, 0.22)";
+        context.shadowBlur = 1.1;
+        context.shadowOffsetX = 0.35;
+        context.shadowOffsetY = 0.65;
         context.fillText(note.text || " ", note.xRatio * canvas.width, note.yRatio * canvas.height);
+        context.shadowColor = "transparent";
+        context.shadowBlur = 0;
+        context.shadowOffsetX = 0;
+        context.shadowOffsetY = 0;
       });
 
     canvases.push(canvas);
@@ -1138,6 +1154,7 @@ export default function Home() {
                                       width: `${displayWidthRatio * 100}%`,
                                       height: `${displayHeight}px`,
                                       fontSize: `${Math.max(10, box.fontSize * 1.35)}px`,
+                                      textShadow: changed ? "0.4px 0.7px 1.2px rgba(17, 24, 39, 0.28)" : undefined,
                                     }}
                                     title={box.originalText}
                                   >
@@ -1213,6 +1230,7 @@ export default function Home() {
                                       left: `${note.xRatio * 100}%`,
                                       top: `${note.yRatio * 100}%`,
                                       fontSize: `${Math.min(24, Math.max(12, note.fontSize * 0.72))}px`,
+                                      textShadow: "0.35px 0.65px 1.1px rgba(31, 111, 103, 0.22)",
                                     }}
                                     type="button"
                                   >
