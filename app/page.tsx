@@ -431,9 +431,9 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
         const x = box.xRatio * canvas.width;
         const y = box.yRatio * canvas.height;
         const width = Math.max(18, Math.max(box.widthRatio, 0.98 - box.xRatio) * canvas.width);
-        const height = Math.max(box.fontSize * scale * 1.4, box.heightRatio * canvas.height);
+        const height = Math.max(box.fontSize * scale * 2.25, box.heightRatio * canvas.height * 2.1);
         context.fillStyle = "#ffffff";
-        context.fillRect(Math.max(0, x - 2), Math.max(0, y - 2), width + 12, height + 4);
+        context.fillRect(Math.max(0, x - 3), Math.max(0, y - 6), width + 14, height + 10);
         context.fillStyle = "#111827";
         context.font = `${Math.max(10, Math.round(box.fontSize * scale))}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
         context.textBaseline = "top";
@@ -650,6 +650,8 @@ export default function Home() {
   const [message, setMessage] = useState("文件只在你的浏览器里处理。");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragTextRef = useRef<{ id: string; dx: number; dy: number; height: number; moved: boolean } | null>(null);
+  const dragPdfTextRef = useRef<{ id: string; dx: number; dy: number; moved: boolean } | null>(null);
+  const suppressPdfTextClickRef = useRef(false);
 
   const selectedTool = useMemo(() => tools.find((tool) => tool.id === activeTool) ?? tools[0], [activeTool]);
   const isPdfTool = selectedTool.kind === "pdf";
@@ -864,6 +866,20 @@ export default function Home() {
     setPdfTextBoxes((current) => current.map((box) => (box.id === selectedPdfTextId ? { ...box, text } : box)));
   }
 
+  function movePdfTextBox(id: string, xRatio: number, yRatio: number) {
+    setPdfTextBoxes((current) =>
+      current.map((box) =>
+        box.id === id
+          ? {
+              ...box,
+              xRatio: Math.max(0, Math.min(0.98, xRatio)),
+              yRatio: Math.max(0, Math.min(0.98, yRatio)),
+            }
+          : box,
+      ),
+    );
+  }
+
   async function processFiles() {
     if (!ready) return;
     setBusy(true);
@@ -1058,26 +1074,69 @@ export default function Home() {
                                 const changed = box.text !== box.originalText;
                                 const selected = selectedPdfTextId === box.id;
                                 const displayWidthRatio = selected || changed ? Math.max(box.widthRatio, 0.98 - box.xRatio) : box.widthRatio;
+                                const displayHeight = selected || changed ? Math.max(24, box.fontSize * 2.4, box.heightRatio * canvasSize.height * 2.1) : Math.max(18, box.heightRatio * canvasSize.height);
                                 return (
                                   <div
                                     className={`absolute overflow-hidden rounded-sm border ${
                                       selected
                                         ? "border-[#f0b35a] bg-white text-[#111827] ring-2 ring-[#f0b35a]"
                                         : changed
-                                          ? "border-transparent bg-white text-[#111827]"
+                                          ? "cursor-move touch-none border-transparent bg-white text-[#111827]"
                                           : "border-transparent bg-[#e7f0ce]/10 text-transparent hover:border-[#1f6f67] hover:bg-[#e7f0ce]/40"
                                     }`}
                                     key={box.id}
                                     onClick={(event) => {
                                       event.stopPropagation();
+                                      if (suppressPdfTextClickRef.current) {
+                                        suppressPdfTextClickRef.current = false;
+                                        return;
+                                      }
                                       setSelectedPdfTextId(box.id);
                                       setSelectedTextId("");
+                                    }}
+                                    onPointerDown={(event) => {
+                                      if (!changed || selected) return;
+                                      event.stopPropagation();
+                                      const rect = event.currentTarget.getBoundingClientRect();
+                                      event.currentTarget.setPointerCapture(event.pointerId);
+                                      dragPdfTextRef.current = {
+                                        id: box.id,
+                                        dx: event.clientX - rect.left,
+                                        dy: event.clientY - rect.top,
+                                        moved: false,
+                                      };
+                                      setSelectedTextId("");
+                                    }}
+                                    onPointerMove={(event) => {
+                                      const drag = dragPdfTextRef.current;
+                                      const parent = event.currentTarget.parentElement;
+                                      if (!drag || drag.id !== box.id || !parent) return;
+                                      const parentBox = parent.getBoundingClientRect();
+                                      drag.moved = true;
+                                      movePdfTextBox(
+                                        box.id,
+                                        (event.clientX - parentBox.left - drag.dx) / parentBox.width,
+                                        (event.clientY - parentBox.top - drag.dy) / parentBox.height,
+                                      );
+                                    }}
+                                    onPointerUp={(event) => {
+                                      const drag = dragPdfTextRef.current;
+                                      if (drag?.id === box.id) {
+                                        if (drag.moved) {
+                                          suppressPdfTextClickRef.current = true;
+                                          setMessage("文字块位置已调整。");
+                                        }
+                                        dragPdfTextRef.current = null;
+                                      }
+                                      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                                        event.currentTarget.releasePointerCapture(event.pointerId);
+                                      }
                                     }}
                                     style={{
                                       left: `${box.xRatio * 100}%`,
                                       top: `${box.yRatio * 100}%`,
                                       width: `${displayWidthRatio * 100}%`,
-                                      height: `${Math.max(18, box.heightRatio * canvasSize.height)}px`,
+                                      height: `${displayHeight}px`,
                                       fontSize: `${Math.max(10, box.fontSize * 1.35)}px`,
                                     }}
                                     title={box.originalText}
