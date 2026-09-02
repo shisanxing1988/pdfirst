@@ -379,6 +379,7 @@ export default function Home() {
   const [editPageMode, setEditPageMode] = useState("all");
   const [editPageNumber, setEditPageNumber] = useState(1);
   const [editFontSize, setEditFontSize] = useState(22);
+  const [previewUrl, setPreviewUrl] = useState("");
   const [outputs, setOutputs] = useState<OutputFile[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("文件只在你的浏览器里处理。");
@@ -395,17 +396,35 @@ export default function Home() {
     });
   }
 
+  function clearPreview() {
+    setPreviewUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return "";
+    });
+  }
+
   function handleFiles(event: ChangeEvent<HTMLInputElement>) {
     const picked = Array.from(event.target.files ?? []);
     setFiles(picked);
     clearOutputs();
-    setMessage(picked.length ? `已选择 ${picked.length} 个文件，请点击下方按钮开始处理。` : "文件只在你的浏览器里处理。");
+    clearPreview();
+    if (picked.length > 0 && selectedTool.kind === "pdf") {
+      setPreviewUrl(URL.createObjectURL(picked[0]));
+    }
+    setMessage(
+      picked.length
+        ? activeTool === "pdf-edit"
+          ? "PDF 已打开。编辑参数后点击保存，下载修改后的 PDF。"
+          : `已选择 ${picked.length} 个文件，请点击下方按钮开始处理。`
+        : "文件只在你的浏览器里处理。",
+    );
   }
 
   function selectTool(toolId: ToolId) {
     setActiveTool(toolId);
     setFiles([]);
     clearOutputs();
+    clearPreview();
     setMessage("选择文件后，再点击处理按钮生成下载文件。");
   }
 
@@ -446,7 +465,10 @@ export default function Home() {
       if (activeTool === "pdf-edit") {
         if (editMode === "replace") {
           const result = await replaceOriginalPdfText(files[0], findText, replaceText);
-          setOutputs([{ name: `${fileBaseName(files[0].name)}-text-edited.pdf`, size: result.blob.size, url: URL.createObjectURL(result.blob) }]);
+          const outputUrl = URL.createObjectURL(result.blob);
+          setOutputs([{ name: `${fileBaseName(files[0].name)}-text-edited.pdf`, size: result.blob.size, url: outputUrl }]);
+          clearPreview();
+          setPreviewUrl(outputUrl);
           setMessage(`已替换 ${result.replacements} 处原文，可以下载。`);
           return;
         }
@@ -457,7 +479,10 @@ export default function Home() {
           pageNumber: editPageNumber,
           fontSize: editFontSize,
         });
-        setOutputs([{ name: `${fileBaseName(files[0].name)}-edited.pdf`, size: pdf.size, url: URL.createObjectURL(pdf) }]);
+        const outputUrl = URL.createObjectURL(pdf);
+        setOutputs([{ name: `${fileBaseName(files[0].name)}-edited.pdf`, size: pdf.size, url: outputUrl }]);
+        clearPreview();
+        setPreviewUrl(outputUrl);
         setMessage("PDF 已添加文字，可以下载。");
         return;
       }
@@ -504,10 +529,10 @@ export default function Home() {
             <div className="max-w-2xl">
               <p className="mb-4 inline-flex rounded bg-[#e7f0ce] px-3 py-1 text-sm font-bold text-[#3d5621]">PDF 核心功能已接入浏览器处理</p>
               <h2 className="text-5xl font-black leading-tight tracking-normal md:text-6xl">
-                PDF 和图片，上传后就能处理。
+                在线打开 PDF，编辑后保存。
               </h2>
               <p className="mt-5 max-w-xl text-lg leading-8 text-[#4f5a55]">
-                支持图片压缩、图片格式转换、图片转 PDF、PDF 合并、PDF 拆分、PDF 轻量压缩和文本型 PDF 原文替换。
+                支持在页面内预览 PDF，替换文本型 PDF 的可识别原文，或添加批注文字后保存下载。
               </p>
             </div>
 
@@ -527,7 +552,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="rounded border border-[#cfc6b7] bg-white p-4 shadow-sm">
+          <div className={`rounded border border-[#cfc6b7] bg-white p-4 shadow-sm ${activeTool === "pdf-edit" ? "lg:col-span-2" : ""}`}>
             <div className="mb-4 flex items-center justify-between gap-4 border-b border-[#ebe5da] pb-3">
               <div>
                 <h3 className="font-black">在线处理台</h3>
@@ -536,20 +561,39 @@ export default function Home() {
               <span className="shrink-0 rounded bg-[#f0b35a] px-3 py-1 text-xs font-black text-[#3a2404]">可用</span>
             </div>
 
-            <label
-              className={`grid min-h-44 cursor-pointer place-items-center rounded border-2 border-dashed p-6 text-center transition hover:border-[#1f6f67] ${
-                files.length > 0 ? "border-[#1f6f67] bg-[#eef7f4]" : "border-[#b9afa0] bg-[#fbfaf6]"
-              }`}
-            >
-              <input className="sr-only" multiple={activeTool !== "pdf-compress" && activeTool !== "pdf-edit"} type="file" accept={accept} onChange={handleFiles} />
-              <span>
-                <strong className="block text-xl">{files.length > 0 ? `已选择 ${files.length} 个文件` : isPdfTool ? "选择 PDF 文件" : "选择图片文件"}</strong>
-                <span className="mt-2 block text-sm text-[#66706c]">
-                  {files.length > 0 ? "可以继续点这里重新选择，或点击下方按钮处理" : isPdfTool ? "支持 PDF 文件，当前仍在浏览器本地处理" : "支持批量选择，当前不上云处理"}
-                </span>
-              </span>
-            </label>
+            <div className={activeTool === "pdf-edit" ? "grid gap-4 xl:grid-cols-[1.2fr_0.8fr]" : ""}>
+              <div>
+                <label
+                  className={`grid min-h-44 cursor-pointer place-items-center rounded border-2 border-dashed p-6 text-center transition hover:border-[#1f6f67] ${
+                    files.length > 0 ? "border-[#1f6f67] bg-[#eef7f4]" : "border-[#b9afa0] bg-[#fbfaf6]"
+                  }`}
+                >
+                  <input className="sr-only" multiple={activeTool !== "pdf-compress" && activeTool !== "pdf-edit"} type="file" accept={accept} onChange={handleFiles} />
+                  <span>
+                    <strong className="block text-xl">{files.length > 0 ? `已选择 ${files.length} 个文件` : isPdfTool ? "选择 PDF 文件" : "选择图片文件"}</strong>
+                    <span className="mt-2 block text-sm text-[#66706c]">
+                      {files.length > 0 ? "可以继续点这里重新选择" : isPdfTool ? "支持 PDF 文件，当前仍在浏览器本地处理" : "支持批量选择，当前不上云处理"}
+                    </span>
+                  </span>
+                </label>
 
+                {activeTool === "pdf-edit" && (
+                  <div className="mt-4 overflow-hidden rounded border border-[#d8d1c3] bg-[#252a29]">
+                    {previewUrl ? (
+                      <iframe className="h-[560px] w-full bg-white" src={previewUrl} title="PDF 在线预览" />
+                    ) : (
+                      <div className="grid h-[560px] place-items-center px-6 text-center text-white">
+                        <div>
+                          <strong className="block text-2xl">打开一个 PDF</strong>
+                          <span className="mt-2 block text-sm text-[#d7dedb]">选择文件后会在这里预览，再在右侧编辑并保存。</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div>
             {!isPdfTool && (
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <label className="text-sm font-bold">
@@ -591,7 +635,7 @@ export default function Home() {
                       <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" placeholder="例如 Receipt" value={replaceText} onChange={(event) => setReplaceText(event.target.value)} />
                     </label>
                     <p className="rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12] md:col-span-2">
-                      第一版支持文本型 PDF 中可直接识别的文字替换。扫描件、复杂中文字体编码、逐字拆分排版可能无法替换。
+                      第一版支持文本型 PDF 中可直接识别的原文替换。左侧预览原文件或保存后的新文件；扫描件、复杂中文字体编码、逐字拆分排版可能无法替换。
                     </p>
                   </>
                 ) : (
@@ -655,6 +699,8 @@ export default function Home() {
                 ))}
               </div>
             )}
+              </div>
+            </div>
           </div>
         </div>
       </section>
