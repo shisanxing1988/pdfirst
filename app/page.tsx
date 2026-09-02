@@ -407,7 +407,8 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
   if (changedBoxes.length === 0 && notes.length === 0) throw new Error("请先点击 PDF 里的文字并修改内容，或添加新文字。");
 
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer(), disableWorker: true }).promise;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.mjs";
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   const canvases: HTMLCanvasElement[] = [];
   const scale = 1.6;
 
@@ -621,7 +622,7 @@ async function replaceOriginalPdfText(file: File, search: string, replacement: s
 }
 
 export default function Home() {
-  const [activeTool, setActiveTool] = useState<ToolId>("pdf-edit");
+  const [activeTool, setActiveTool] = useState<ToolId>("compress");
   const [files, setFiles] = useState<File[]>([]);
   const [quality, setQuality] = useState(76);
   const [maxSide, setMaxSide] = useState(1600);
@@ -664,8 +665,9 @@ export default function Home() {
 
       try {
         const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.mjs";
         const data = await files[0].arrayBuffer();
-        const documentTask = pdfjsLib.getDocument({ data, disableWorker: true });
+        const documentTask = pdfjsLib.getDocument({ data });
         const pdf = await documentTask.promise;
         const pageNumber = Math.max(1, Math.min(currentPage, pdf.numPages));
         const page = await pdf.getPage(pageNumber);
