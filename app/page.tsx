@@ -12,6 +12,16 @@ type OutputFile = {
   url: string;
 };
 
+type VisualText = {
+  id: string;
+  text: string;
+  xRatio: number;
+  yRatio: number;
+  pageMode: string;
+  pageNumber: number;
+  fontSize: number;
+};
+
 const tools: Array<{
   id: ToolId;
   kind: ToolKind;
@@ -255,6 +265,31 @@ async function editPdf(file: File, options: { text: string; pageMode: string; pa
   return new Blob([bytes], { type: "application/pdf" });
 }
 
+async function saveVisualPdfEdits(file: File, notes: VisualText[]) {
+  if (notes.length === 0) throw new Error("请先在 PDF 预览区域点击添加文字。");
+  const pdf = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const pages = pdf.getPages();
+
+  notes.forEach((note) => {
+    const targetPages = note.pageMode === "all" ? pages : [pages[Math.max(0, Math.min(pages.length - 1, note.pageNumber - 1))]];
+    targetPages.forEach((page) => {
+      const { width, height } = page.getSize();
+      page.drawText(note.text, {
+        x: Math.max(12, Math.min(width - 24, note.xRatio * width)),
+        y: Math.max(12, Math.min(height - 24, height - note.yRatio * height)),
+        size: note.fontSize,
+        font,
+        color: rgb(0.12, 0.44, 0.41),
+        opacity: 0.9,
+      });
+    });
+  });
+
+  const bytes = await pdf.save({ useObjectStreams: true });
+  return new Blob([bytes], { type: "application/pdf" });
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -367,25 +402,28 @@ async function replaceOriginalPdfText(file: File, search: string, replacement: s
 }
 
 export default function Home() {
-  const [activeTool, setActiveTool] = useState<ToolId>("compress");
+  const [activeTool, setActiveTool] = useState<ToolId>("pdf-edit");
   const [files, setFiles] = useState<File[]>([]);
   const [quality, setQuality] = useState(76);
   const [maxSide, setMaxSide] = useState(1600);
   const [format, setFormat] = useState("image/webp");
-  const [editText, setEditText] = useState("Reviewed");
-  const [editMode, setEditMode] = useState("replace");
+  const [editText, setEditText] = useState("请输入文字");
+  const [editMode, setEditMode] = useState("visual");
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
   const [editPageMode, setEditPageMode] = useState("all");
   const [editPageNumber, setEditPageNumber] = useState(1);
   const [editFontSize, setEditFontSize] = useState(22);
   const [previewUrl, setPreviewUrl] = useState("");
+  const [visualTexts, setVisualTexts] = useState<VisualText[]>([]);
+  const [selectedTextId, setSelectedTextId] = useState("");
   const [outputs, setOutputs] = useState<OutputFile[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("文件只在你的浏览器里处理。");
 
   const selectedTool = useMemo(() => tools.find((tool) => tool.id === activeTool) ?? tools[0], [activeTool]);
   const isPdfTool = selectedTool.kind === "pdf";
+  const selectedVisualText = visualTexts.find((note) => note.id === selectedTextId);
   const ready = files.length > 0;
   const accept = isPdfTool ? "application/pdf,.pdf" : "image/*";
 
@@ -408,13 +446,15 @@ export default function Home() {
     setFiles(picked);
     clearOutputs();
     clearPreview();
+    setVisualTexts([]);
+    setSelectedTextId("");
     if (picked.length > 0 && selectedTool.kind === "pdf") {
       setPreviewUrl(URL.createObjectURL(picked[0]));
     }
     setMessage(
       picked.length
         ? activeTool === "pdf-edit"
-          ? "PDF 已打开。编辑参数后点击保存，下载修改后的 PDF。"
+          ? "PDF 已打开。点击预览区域添加文字，或切换到原文替换模式。"
           : `已选择 ${picked.length} 个文件，请点击下方按钮开始处理。`
         : "文件只在你的浏览器里处理。",
     );
@@ -425,7 +465,36 @@ export default function Home() {
     setFiles([]);
     clearOutputs();
     clearPreview();
+    setVisualTexts([]);
+    setSelectedTextId("");
     setMessage("选择文件后，再点击处理按钮生成下载文件。");
+  }
+
+  function addVisualText(event: React.MouseEvent<HTMLDivElement>) {
+    if (!previewUrl || activeTool !== "pdf-edit" || editMode !== "visual") return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const note: VisualText = {
+      id: crypto.randomUUID(),
+      text: editText.trim() || "请输入文字",
+      xRatio: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
+      yRatio: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+      pageMode: editPageMode,
+      pageNumber: editPageNumber,
+      fontSize: editFontSize,
+    };
+    setVisualTexts((current) => [...current, note]);
+    setSelectedTextId(note.id);
+    setMessage("已在页面上添加文字。可以继续点击添加，或保存为新 PDF。");
+  }
+
+  function updateSelectedText(updates: Partial<VisualText>) {
+    setVisualTexts((current) => current.map((note) => (note.id === selectedTextId ? { ...note, ...updates } : note)));
+  }
+
+  function removeSelectedText() {
+    setVisualTexts((current) => current.filter((note) => note.id !== selectedTextId));
+    setSelectedTextId("");
+    setMessage("已删除选中的文字标记。");
   }
 
   async function processFiles() {
@@ -463,6 +532,16 @@ export default function Home() {
       }
 
       if (activeTool === "pdf-edit") {
+        if (editMode === "visual") {
+          const pdf = await saveVisualPdfEdits(files[0], visualTexts);
+          const outputUrl = URL.createObjectURL(pdf);
+          setOutputs([{ name: `${fileBaseName(files[0].name)}-visual-edited.pdf`, size: pdf.size, url: outputUrl }]);
+          clearPreview();
+          setPreviewUrl(outputUrl);
+          setMessage("PDF 已保存，新文件已在左侧预览，可以下载。");
+          return;
+        }
+
         if (editMode === "replace") {
           const result = await replaceOriginalPdfText(files[0], findText, replaceText);
           const outputUrl = URL.createObjectURL(result.blob);
@@ -580,12 +659,38 @@ export default function Home() {
                 {activeTool === "pdf-edit" && (
                   <div className="mt-4 overflow-hidden rounded border border-[#d8d1c3] bg-[#252a29]">
                     {previewUrl ? (
-                      <iframe className="h-[560px] w-full bg-white" src={previewUrl} title="PDF 在线预览" />
+                      <div className="relative h-[560px] w-full">
+                        <iframe className="h-full w-full bg-white pointer-events-none" src={`${previewUrl}#toolbar=0&navpanes=0`} title="PDF 在线预览" />
+                        {editMode === "visual" && (
+                          <div aria-label="PDF 可视化编辑层" className="absolute inset-0 cursor-crosshair" onClick={addVisualText}>
+                            {visualTexts.map((note) => (
+                              <button
+                                className={`absolute max-w-56 -translate-y-1/2 rounded border bg-white/90 px-2 py-1 text-left font-bold text-[#1f6f67] shadow-sm ${
+                                  selectedTextId === note.id ? "border-[#f0b35a] ring-2 ring-[#f0b35a]" : "border-[#1f6f67]"
+                                }`}
+                                key={note.id}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedTextId(note.id);
+                                }}
+                                style={{
+                                  left: `${note.xRatio * 100}%`,
+                                  top: `${note.yRatio * 100}%`,
+                                  fontSize: `${Math.min(24, Math.max(12, note.fontSize * 0.72))}px`,
+                                }}
+                                type="button"
+                              >
+                                {note.text}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <div className="grid h-[560px] place-items-center px-6 text-center text-white">
                         <div>
                           <strong className="block text-2xl">打开一个 PDF</strong>
-                          <span className="mt-2 block text-sm text-[#d7dedb]">选择文件后会在这里预览，再在右侧编辑并保存。</span>
+                          <span className="mt-2 block text-sm text-[#d7dedb]">选择文件后会在这里预览，再点击页面添加文字。</span>
                         </div>
                       </div>
                     )}
@@ -620,11 +725,48 @@ export default function Home() {
                 <label className="text-sm font-bold md:col-span-2">
                   编辑模式
                   <select className="mt-2 w-full rounded border border-[#cfc6b7] bg-white px-3 py-2" value={editMode} onChange={(event) => setEditMode(event.target.value)}>
+                    <option value="visual">可视化编辑</option>
                     <option value="replace">替换 PDF 原文</option>
                     <option value="annotation">添加批注文字</option>
                   </select>
                 </label>
-                {editMode === "replace" ? (
+                {editMode === "visual" ? (
+                  <>
+                    <label className="text-sm font-bold md:col-span-2">
+                      要添加的文字
+                      <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" value={editText} onChange={(event) => setEditText(event.target.value)} />
+                    </label>
+                    <label className="text-sm font-bold">
+                      页面
+                      <select className="mt-2 w-full rounded border border-[#cfc6b7] bg-white px-3 py-2" value={editPageMode} onChange={(event) => setEditPageMode(event.target.value)}>
+                        <option value="single">当前指定页</option>
+                        <option value="all">全部页面</option>
+                      </select>
+                    </label>
+                    <label className="text-sm font-bold">
+                      页码
+                      <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2 disabled:bg-[#eee8dd]" disabled={editPageMode === "all"} min="1" type="number" value={editPageNumber} onChange={(event) => setEditPageNumber(Number(event.target.value))} />
+                    </label>
+                    <label className="text-sm font-bold md:col-span-2">
+                      字号 {editFontSize}
+                      <input className="mt-2 w-full accent-[#1f6f67]" min="10" max="72" type="range" value={editFontSize} onChange={(event) => setEditFontSize(Number(event.target.value))} />
+                    </label>
+                    {selectedVisualText && (
+                      <div className="rounded border border-[#d8d1c3] bg-[#fbfaf6] p-3 md:col-span-2">
+                        <label className="text-sm font-bold">
+                          修改选中文字
+                          <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" value={selectedVisualText.text} onChange={(event) => updateSelectedText({ text: event.target.value })} />
+                        </label>
+                        <button className="mt-3 rounded border border-[#a33a2d] px-3 py-2 text-sm font-bold text-[#a33a2d]" type="button" onClick={removeSelectedText}>
+                          删除选中文字
+                        </button>
+                      </div>
+                    )}
+                    <p className="rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12] md:col-span-2">
+                      点击左侧 PDF 预览位置即可放入文字；保存后会生成新 PDF。当前可视化编辑写入的是文字层，不会直接改掉底层原文。
+                    </p>
+                  </>
+                ) : editMode === "replace" ? (
                   <>
                     <label className="text-sm font-bold">
                       查找原文字
@@ -675,7 +817,7 @@ export default function Home() {
               disabled={!ready || busy}
               onClick={processFiles}
             >
-              {busy ? "处理中..." : files.length > 0 ? "处理已选择文件" : isPdfTool ? "先选择 PDF 文件" : "先选择图片文件"}
+              {busy ? "处理中..." : files.length > 0 ? (activeTool === "pdf-edit" ? "保存 PDF" : "处理已选择文件") : isPdfTool ? "先选择 PDF 文件" : "先选择图片文件"}
             </button>
 
             <p className="mt-3 text-sm text-[#66706c]">{message}</p>
