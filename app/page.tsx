@@ -831,8 +831,8 @@ export default function Home() {
       fontSize: editFontSize,
     };
     setVisualTexts((current) => [...current, note]);
-    setSelectedTextId(note.id);
-    setMessage("已在页面上添加文字。可以继续点击添加，或保存为新 PDF。");
+    setSelectedTextId("");
+    setMessage("已在页面上添加文字。需要调整时可拖动文字框，或点击文字后修改。");
     setPlacingText(false);
   }
 
@@ -1045,6 +1045,10 @@ export default function Home() {
                             className={`relative mx-auto bg-white shadow-lg ${placingText ? "cursor-crosshair" : ""}`}
                             onClick={(event: MouseEvent<HTMLDivElement>) => {
                               if (editMode === "visual" && placingText) addVisualText(event);
+                              if (editMode === "visual" && !placingText) {
+                                setSelectedPdfTextId("");
+                                setSelectedTextId("");
+                              }
                             }}
                             style={{ width: canvasSize.width || 620, height: canvasSize.height || 820 }}
                           >
@@ -1096,8 +1100,8 @@ export default function Home() {
                                 .filter((note) => note.pageMode === "all" || note.pageNumber === currentPage)
                                 .map((note) => (
                                   <button
-                                    className={`absolute max-w-56 touch-none -translate-y-1/2 cursor-move rounded border bg-white/90 px-2 py-1 text-left font-bold text-[#1f6f67] shadow-sm ${
-                                      selectedTextId === note.id ? "border-[#f0b35a] ring-2 ring-[#f0b35a]" : "border-[#1f6f67]"
+                                    className={`absolute max-w-56 touch-none -translate-y-1/2 cursor-move rounded border px-2 py-1 text-left font-bold text-[#1f6f67] ${
+                                      selectedTextId === note.id ? "border-[#f0b35a] bg-white/90 shadow-sm ring-2 ring-[#f0b35a]" : "border-transparent bg-transparent hover:border-[#1f6f67] hover:bg-white/80"
                                     }`}
                                     key={note.id}
                                     onClick={(event) => {
