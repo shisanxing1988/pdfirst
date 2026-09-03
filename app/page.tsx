@@ -97,6 +97,7 @@ const tools: Array<{
 
 const imageTools = tools.filter((tool) => tool.kind === "image");
 const pdfTools = tools.filter((tool) => tool.kind === "pdf");
+const editedPdfTextScale = 0.88;
 
 function prettySize(size: number) {
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
@@ -439,7 +440,7 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
         context.fillStyle = "#ffffff";
         context.fillRect(Math.max(0, x - 3), Math.max(0, y - 6), width + 14, height + 10);
         context.fillStyle = "#111827";
-        context.font = `${Math.max(10, Math.round(box.fontSize * scale))}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
+        context.font = `${Math.max(8, Math.round(box.fontSize * scale * editedPdfTextScale))}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
         context.textBaseline = "top";
         context.shadowColor = "rgba(17, 24, 39, 0.28)";
         context.shadowBlur = 1.2;
@@ -1184,7 +1185,7 @@ export default function Home() {
                                       top: `${displayYRatio * 100}%`,
                                       width: `${displayWidthRatio * 100}%`,
                                       height: `${displayHeight}px`,
-                                      fontSize: `${Math.max(10, box.fontSize * 1.35)}px`,
+                                      fontSize: `${Math.max(8, box.fontSize * 1.35 * editedPdfTextScale)}px`,
                                       textShadow: changed ? "0.4px 0.7px 1.2px rgba(17, 24, 39, 0.28)" : undefined,
                                     }}
                                     title={box.originalText}
