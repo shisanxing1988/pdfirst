@@ -832,6 +832,20 @@ export default function Home() {
     setMessage("已回到可编辑状态，可以继续修改。");
   }
 
+  function startTextPlacement() {
+    if (!previewUrl || previewingOutput) return;
+    setPlacingText(true);
+    setSelectedPdfTextId("");
+    setSelectedTextId("");
+    setEditMode("visual");
+    setMessage("请在左侧 PDF 页面上点击要放置文字的位置。");
+  }
+
+  function stopTextPlacement() {
+    setPlacingText(false);
+    setMessage("已取消添加文字。");
+  }
+
   async function saveOutputFile(output: OutputFile) {
     const fileName = output.name.trim() || "download";
     const windowWithPicker = window as Window & {
@@ -1186,6 +1200,68 @@ export default function Home() {
                   <div className="mt-4 overflow-hidden rounded border border-[#d8d1c3] bg-[#252a29]">
                     {previewUrl ? (
                       <div>
+                        <div className="flex flex-wrap items-center gap-2 border-b border-white/10 bg-[#f7f4ee] px-3 py-3 text-sm">
+                          <button
+                            className={`rounded px-3 py-2 font-black ${!placingText && !previewingOutput ? "bg-[#1f6f67] text-white" : "border border-[#cfc6b7] bg-white text-[#18201f]"}`}
+                            disabled={previewingOutput}
+                            onClick={() => {
+                              setPlacingText(false);
+                              setSelectedTextId("");
+                              setEditMode("visual");
+                              setMessage("点击页面文字即可直接编辑。");
+                            }}
+                            type="button"
+                          >
+                            编辑文字
+                          </button>
+                          <button
+                            className={`rounded px-3 py-2 font-black ${placingText ? "bg-[#f0b35a] text-[#3a2404]" : "border border-[#cfc6b7] bg-white text-[#18201f]"}`}
+                            disabled={previewingOutput}
+                            onClick={placingText ? stopTextPlacement : startTextPlacement}
+                            type="button"
+                          >
+                            {placingText ? "取消添加" : "添加文字"}
+                          </button>
+                          <select
+                            className="rounded border border-[#cfc6b7] bg-white px-3 py-2 font-bold disabled:opacity-50"
+                            disabled={previewingOutput}
+                            value={styleFontFamily}
+                            onChange={(event) => {
+                              setEditFontFamily(event.target.value);
+                              updateTextStyle({ fontFamily: event.target.value });
+                            }}
+                          >
+                            {fontOptions.map((font) => (
+                              <option key={font.value} value={font.value}>
+                                {font.label}
+                              </option>
+                            ))}
+                          </select>
+                          <label className="flex items-center gap-2 rounded border border-[#cfc6b7] bg-white px-3 py-2 font-bold">
+                            字号
+                            <input
+                              className="w-16 bg-transparent outline-none disabled:opacity-50"
+                              disabled={previewingOutput}
+                              max="72"
+                              min="8"
+                              type="number"
+                              value={styleFontSize}
+                              onChange={(event) => {
+                                const nextSize = Math.max(8, Math.min(72, Number(event.target.value) || 8));
+                                setEditFontSize(nextSize);
+                                updateTextStyle({ fontSize: nextSize });
+                              }}
+                            />
+                          </label>
+                          <button
+                            className="ml-auto rounded bg-[#1f6f67] px-4 py-2 font-black text-white disabled:bg-[#a5aaa6]"
+                            disabled={!ready || busy || previewingOutput}
+                            onClick={processFiles}
+                            type="button"
+                          >
+                            {busy ? "保存中..." : "保存 PDF"}
+                          </button>
+                        </div>
                         <div className="flex flex-wrap items-center justify-between gap-3 bg-[#18201f] px-3 py-2 text-sm text-white">
                           <button className="rounded border border-white/30 px-3 py-1 font-bold disabled:opacity-40" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} type="button">
                             上一页
