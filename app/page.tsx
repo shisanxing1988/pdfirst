@@ -708,6 +708,8 @@ export default function Home() {
   const [editFontFamily, setEditFontFamily] = useState("system");
   const [editClarity, setEditClarity] = useState(78);
   const [previewUrl, setPreviewUrl] = useState("");
+  const [editablePdfUrl, setEditablePdfUrl] = useState("");
+  const [previewingOutput, setPreviewingOutput] = useState(false);
   const [visualTexts, setVisualTexts] = useState<VisualText[]>([]);
   const [selectedTextId, setSelectedTextId] = useState("");
   const [placingText, setPlacingText] = useState(false);
@@ -761,10 +763,9 @@ export default function Home() {
         setPdfPageCount(pdf.numPages);
         await page.render({ canvas, canvasContext: context, viewport }).promise;
 
-        const textContent = await page.getTextContent();
-        const nextBoxes = buildTextBoxes(pdfjsLib, textContent, viewport, pageNumber, pdfTextBoxes);
-
-        if (!cancelled) {
+        if (!previewingOutput && !cancelled) {
+          const textContent = await page.getTextContent();
+          const nextBoxes = buildTextBoxes(pdfjsLib, textContent, viewport, pageNumber, pdfTextBoxes);
           setPdfTextBoxes((current) => [
             ...current.filter((box) => box.pageNumber !== pageNumber),
             ...nextBoxes,
@@ -780,7 +781,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [activeTool, currentPage, editMode, previewUrl]);
+  }, [activeTool, currentPage, editMode, previewUrl, previewingOutput]);
 
   function clearOutputs() {
     setOutputs((current) => {
@@ -791,9 +792,11 @@ export default function Home() {
 
   function clearPreview() {
     setPreviewUrl((current) => {
-      if (current) URL.revokeObjectURL(current);
+      if (current && current === editablePdfUrl) URL.revokeObjectURL(current);
       return "";
     });
+    setEditablePdfUrl("");
+    setPreviewingOutput(false);
   }
 
   function updateOutputName(url: string, name: string) {
@@ -805,12 +808,28 @@ export default function Home() {
     setActiveTool("pdf-edit");
     setEditMode("visual");
     setPreviewUrl(output.url);
-    setPdfTextBoxes([]);
+    setPreviewingOutput(true);
     setSelectedPdfTextId("");
     setSelectedTextId("");
     setPlacingText(false);
     setCurrentPage(1);
-    setMessage(`正在预览：${output.name}`);
+    setMessage(`正在预览最终 PDF：${output.name}`);
+  }
+
+  function cancelOutputPreview() {
+    let nextUrl = editablePdfUrl;
+    if (!nextUrl && files[0]) {
+      nextUrl = URL.createObjectURL(files[0]);
+      setEditablePdfUrl(nextUrl);
+    }
+    if (!nextUrl) return;
+    setPreviewUrl(nextUrl);
+    setPreviewingOutput(false);
+    setSelectedPdfTextId("");
+    setSelectedTextId("");
+    setPlacingText(false);
+    setCurrentPage(1);
+    setMessage("已回到可编辑状态，可以继续修改。");
   }
 
   async function saveOutputFile(output: OutputFile) {
@@ -881,7 +900,10 @@ export default function Home() {
     setPdfPageCount(0);
     setCurrentPage(1);
     if (picked.length > 0 && selectedTool.kind === "pdf") {
-      setPreviewUrl(URL.createObjectURL(picked[0]));
+      const nextUrl = URL.createObjectURL(picked[0]);
+      setEditablePdfUrl(nextUrl);
+      setPreviewUrl(nextUrl);
+      setPreviewingOutput(false);
     }
     setMessage(
       picked.length
@@ -1164,13 +1186,20 @@ export default function Home() {
                   <div className="mt-4 overflow-hidden rounded border border-[#d8d1c3] bg-[#252a29]">
                     {previewUrl ? (
                       <div>
-                        <div className="flex items-center justify-between gap-3 bg-[#18201f] px-3 py-2 text-sm text-white">
+                        <div className="flex flex-wrap items-center justify-between gap-3 bg-[#18201f] px-3 py-2 text-sm text-white">
                           <button className="rounded border border-white/30 px-3 py-1 font-bold disabled:opacity-40" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} type="button">
                             上一页
                           </button>
-                          <span>
-                            第 {currentPage} 页 / 共 {pdfPageCount || 1} 页
-                          </span>
+                          <div className="flex items-center gap-3">
+                            <span>
+                              第 {currentPage} 页 / 共 {pdfPageCount || 1} 页
+                            </span>
+                            {previewingOutput && editablePdfUrl && (
+                              <button className="rounded bg-[#f0b35a] px-3 py-1 font-black text-[#3a2404]" onClick={cancelOutputPreview} type="button">
+                                取消预览，继续编辑
+                              </button>
+                            )}
+                          </div>
                           <button className="rounded border border-white/30 px-3 py-1 font-bold disabled:opacity-40" disabled={pdfPageCount > 0 && currentPage >= pdfPageCount} onClick={() => setCurrentPage((page) => Math.min(pdfPageCount || page + 1, page + 1))} type="button">
                             下一页
                           </button>
@@ -1189,6 +1218,7 @@ export default function Home() {
                           >
                             <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
                             {editMode === "visual" &&
+                              !previewingOutput &&
                               currentTextBoxes
                                 .filter(isPdfTextEdited)
                                 .map((box) => {
@@ -1209,6 +1239,7 @@ export default function Home() {
                                   );
                                 })}
                             {editMode === "visual" &&
+                              !previewingOutput &&
                               currentTextBoxes.map((box) => {
                                 const changed = isPdfTextEdited(box);
                                 const selected = selectedPdfTextId === box.id;
@@ -1302,6 +1333,7 @@ export default function Home() {
                                 );
                               })}
                             {editMode === "visual" &&
+                              !previewingOutput &&
                               visualTexts
                                 .filter((note) => note.pageMode === "all" || note.pageNumber === currentPage)
                                 .map((note) => (
