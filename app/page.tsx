@@ -137,6 +137,14 @@ function isPdfTextEdited(box: PdfTextBox) {
   );
 }
 
+function pdfTextBoxHeight(box: PdfTextBox, canvasHeight: number) {
+  return Math.max(16, box.heightRatio * canvasHeight + Math.max(2, box.fontSize * 0.22));
+}
+
+function pdfTextMaskHeight(box: PdfTextBox, canvasHeight: number) {
+  return Math.max(14, box.heightRatio * canvasHeight + Math.max(1, box.fontSize * 0.14));
+}
+
 function prettySize(size: number) {
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(2)} MB`;
@@ -475,9 +483,9 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
         const textY = (box.editYRatio ?? box.yRatio) * canvas.height;
         const clarity = box.clarity ?? 78;
         const width = Math.max(18, Math.max(box.widthRatio, 0.98 - box.xRatio) * canvas.width);
-        const height = Math.max(box.fontSize * scale * 2.25, box.heightRatio * canvas.height * 2.1);
+        const height = pdfTextMaskHeight(box, canvas.height);
         context.fillStyle = "#ffffff";
-        context.fillRect(Math.max(0, x - 3), Math.max(0, y - 6), width + 14, height + 10);
+        context.fillRect(Math.max(0, x - 2), Math.max(0, y - 1), width + 10, height + 3);
         context.fillStyle = "#111827";
         context.font = `${Math.max(8, Math.round(effectivePdfFontSize(box) * scale))}px ${fontStack(box.fontFamily)}`;
         context.textBaseline = "top";
@@ -1314,7 +1322,7 @@ export default function Home() {
                                 .filter(isPdfTextEdited)
                                 .map((box) => {
                                   const maskWidthRatio = Math.max(box.widthRatio, 0.98 - box.xRatio);
-                                  const maskHeight = Math.max(24, box.fontSize * 2.4, box.heightRatio * canvasSize.height * 2.1);
+                                  const maskHeight = pdfTextMaskHeight(box, canvasSize.height);
                                   return (
                                     <div
                                       aria-hidden="true"
@@ -1337,7 +1345,7 @@ export default function Home() {
                                 const displayXRatio = changed ? (box.editXRatio ?? box.xRatio) : box.xRatio;
                                 const displayYRatio = changed ? (box.editYRatio ?? box.yRatio) : box.yRatio;
                                 const displayWidthRatio = selected || changed ? Math.max(box.widthRatio, 0.98 - displayXRatio) : box.widthRatio;
-                                const displayHeight = selected || changed ? Math.max(24, box.fontSize * 2.4, box.heightRatio * canvasSize.height * 2.1) : Math.max(18, box.heightRatio * canvasSize.height);
+                                const displayHeight = selected || changed ? pdfTextBoxHeight(box, canvasSize.height) : Math.max(16, box.heightRatio * canvasSize.height);
                                 return (
                                   <div
                                     className={`absolute overflow-hidden rounded-sm border ${
