@@ -1192,13 +1192,14 @@ export default function Home() {
                                     {selected ? (
                                       <textarea
                                         autoFocus
-                                        className="h-full w-full resize-none border-0 bg-transparent px-1 py-0 leading-tight text-[#111827] outline-none"
+                                        className="h-full w-full resize-none overflow-hidden whitespace-pre border-0 bg-transparent px-1 py-0 leading-tight text-[#111827] outline-none"
                                         onClick={(event) => event.stopPropagation()}
                                         onChange={(event) => updateSelectedPdfText(event.target.value)}
                                         value={box.text}
+                                        wrap="off"
                                       />
                                     ) : (
-                                      <button className="h-full w-full px-1 py-0 text-left leading-tight" type="button">
+                                      <button className="h-full w-full overflow-hidden whitespace-nowrap px-1 py-0 text-left leading-tight" type="button">
                                         {changed ? box.text : box.originalText}
                                       </button>
                                     )}
