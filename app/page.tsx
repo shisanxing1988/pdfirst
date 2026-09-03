@@ -739,14 +739,14 @@ export default function Home() {
     let cancelled = false;
 
     async function renderPdfPage() {
-      if (!files[0] || activeTool !== "pdf-edit" || editMode !== "visual") return;
+      if (!previewUrl || activeTool !== "pdf-edit" || editMode !== "visual") return;
       const canvas = canvasRef.current;
       if (!canvas) return;
 
       try {
         const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
         pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.mjs";
-        const data = await files[0].arrayBuffer();
+        const data = await fetch(previewUrl).then((response) => response.arrayBuffer());
         const documentTask = pdfjsLib.getDocument({ data });
         const pdf = await documentTask.promise;
         const pageNumber = Math.max(1, Math.min(currentPage, pdf.numPages));
@@ -780,7 +780,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [activeTool, currentPage, editMode, files]);
+  }, [activeTool, currentPage, editMode, previewUrl]);
 
   function clearOutputs() {
     setOutputs((current) => {
@@ -798,6 +798,19 @@ export default function Home() {
 
   function updateOutputName(url: string, name: string) {
     setOutputs((current) => current.map((output) => (output.url === url ? { ...output, name } : output)));
+  }
+
+  function previewOutputFile(output: OutputFile) {
+    if (output.blob.type !== "application/pdf" && !output.name.toLowerCase().endsWith(".pdf")) return;
+    setActiveTool("pdf-edit");
+    setEditMode("visual");
+    setPreviewUrl(output.url);
+    setPdfTextBoxes([]);
+    setSelectedPdfTextId("");
+    setSelectedTextId("");
+    setPlacingText(false);
+    setCurrentPage(1);
+    setMessage(`正在预览：${output.name}`);
   }
 
   async function saveOutputFile(output: OutputFile) {
@@ -1583,9 +1596,16 @@ export default function Home() {
                     </label>
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-sm text-[#66706c]">{prettySize(output.size)}</span>
-                      <button className="rounded bg-[#1f6f67] px-4 py-2 text-sm font-black text-white hover:bg-[#15534d]" onClick={() => saveOutputFile(output)} type="button">
-                        保存
-                      </button>
+                      <div className="flex gap-2">
+                        {(output.blob.type === "application/pdf" || output.name.toLowerCase().endsWith(".pdf")) && (
+                          <button className="rounded border border-[#1f6f67] px-4 py-2 text-sm font-black text-[#1f6f67] hover:bg-white" onClick={() => previewOutputFile(output)} type="button">
+                            预览
+                          </button>
+                        )}
+                        <button className="rounded bg-[#1f6f67] px-4 py-2 text-sm font-black text-white hover:bg-[#15534d]" onClick={() => saveOutputFile(output)} type="button">
+                          保存
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
