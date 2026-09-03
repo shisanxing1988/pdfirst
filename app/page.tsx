@@ -1041,9 +1041,7 @@ export default function Home() {
           const pdf = await saveVisualEditorPdf(files[0], pdfTextBoxes, visualTexts);
           const outputUrl = URL.createObjectURL(pdf);
           setOutputs([{ name: `${fileBaseName(files[0].name)}-visual-edited.pdf`, size: pdf.size, url: outputUrl, blob: pdf }]);
-          clearPreview();
-          setPreviewUrl(outputUrl);
-          setMessage(editedTextBoxes.length > 0 ? "文字块编辑已生成，新文件已在左侧预览。可先改文件名，再手动保存。" : "PDF 已生成，新文件已在左侧预览。可先改文件名，再手动保存。");
+          setMessage(editedTextBoxes.length > 0 ? "文字块编辑已生成。左侧仍可继续修改；需要查看最终文件时点下方预览。" : "PDF 已生成。左侧仍可继续修改；需要查看最终文件时点下方预览。");
           return;
         }
 
