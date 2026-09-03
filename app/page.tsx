@@ -805,6 +805,21 @@ export default function Home() {
 
   function previewOutputFile(output: OutputFile) {
     if (output.blob.type !== "application/pdf" && !output.name.toLowerCase().endsWith(".pdf")) return;
+    const width = window.screen.availWidth || 1440;
+    const height = window.screen.availHeight || 900;
+    const previewWindow = window.open(
+      output.url,
+      "_blank",
+      `popup=yes,width=${width},height=${height},left=0,top=0,resizable=yes,scrollbars=yes`,
+    );
+    if (previewWindow) {
+      previewWindow.moveTo?.(0, 0);
+      previewWindow.resizeTo?.(width, height);
+      previewWindow.focus();
+      setMessage(`已在新窗口打开预览：${output.name}`);
+      return;
+    }
+
     setActiveTool("pdf-edit");
     setEditMode("visual");
     setPreviewUrl(output.url);
@@ -813,7 +828,7 @@ export default function Home() {
     setSelectedTextId("");
     setPlacingText(false);
     setCurrentPage(1);
-    setMessage(`正在预览最终 PDF：${output.name}`);
+    setMessage(`新窗口被浏览器拦截，已在页面内预览：${output.name}`);
   }
 
   function cancelOutputPreview() {
