@@ -21,6 +21,8 @@ type VisualText = {
   pageMode: string;
   pageNumber: number;
   fontSize: number;
+  fontFamily: string;
+  clarity: number;
 };
 
 type PdfTextBox = {
@@ -35,6 +37,9 @@ type PdfTextBox = {
   widthRatio: number;
   heightRatio: number;
   fontSize: number;
+  editedFontSize?: number;
+  fontFamily?: string;
+  clarity?: number;
 };
 
 const tools: Array<{
@@ -98,6 +103,39 @@ const tools: Array<{
 const imageTools = tools.filter((tool) => tool.kind === "image");
 const pdfTools = tools.filter((tool) => tool.kind === "pdf");
 const editedPdfTextScale = 0.88;
+const fontOptions = [
+  { value: "system", label: "默认黑体", stack: 'Arial, "PingFang SC", "Microsoft YaHei", sans-serif' },
+  { value: "song", label: "宋体", stack: 'SimSun, "Songti SC", serif' },
+  { value: "hei", label: "黑体", stack: 'SimHei, "Heiti SC", "Microsoft YaHei", sans-serif' },
+  { value: "serif", label: "衬线", stack: 'Georgia, "Times New Roman", serif' },
+];
+
+function fontStack(value?: string) {
+  return fontOptions.find((font) => font.value === value)?.stack ?? fontOptions[0].stack;
+}
+
+function textShadow(value: string, clarity = 78) {
+  const softness = Math.max(0, Math.min(1, (100 - clarity) / 100));
+  if (softness < 0.04) return "none";
+  return value === "green"
+    ? `0.35px 0.65px ${Math.max(0.2, softness * 5).toFixed(1)}px rgba(31, 111, 103, ${Math.min(0.32, softness * 0.9).toFixed(2)})`
+    : `0.4px 0.7px ${Math.max(0.2, softness * 5.4).toFixed(1)}px rgba(17, 24, 39, ${Math.min(0.38, softness).toFixed(2)})`;
+}
+
+function effectivePdfFontSize(box: PdfTextBox) {
+  return box.editedFontSize ?? box.fontSize * editedPdfTextScale;
+}
+
+function isPdfTextEdited(box: PdfTextBox) {
+  return (
+    box.text !== box.originalText ||
+    box.editXRatio !== undefined ||
+    box.editYRatio !== undefined ||
+    box.editedFontSize !== undefined ||
+    box.fontFamily !== undefined ||
+    box.clarity !== undefined
+  );
+}
 
 function prettySize(size: number) {
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
@@ -369,7 +407,7 @@ async function saveVisualPdfEdits(file: File, notes: VisualText[]) {
 }
 
 async function saveSelectedTextEdits(file: File, boxes: PdfTextBox[]) {
-  const changed = boxes.filter((box) => box.text !== box.originalText);
+  const changed = boxes.filter(isPdfTextEdited);
   if (changed.length === 0) throw new Error("请先点击 PDF 里的文字并修改内容。");
 
   const pdf = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
@@ -408,7 +446,7 @@ async function saveSelectedTextEdits(file: File, boxes: PdfTextBox[]) {
 }
 
 async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: VisualText[]) {
-  const changedBoxes = boxes.filter((box) => box.text !== box.originalText);
+  const changedBoxes = boxes.filter(isPdfTextEdited);
   if (changedBoxes.length === 0 && notes.length === 0) throw new Error("请先点击 PDF 里的文字并修改内容，或添加新文字。");
 
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -435,15 +473,16 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
         const y = box.yRatio * canvas.height;
         const textX = (box.editXRatio ?? box.xRatio) * canvas.width;
         const textY = (box.editYRatio ?? box.yRatio) * canvas.height;
+        const clarity = box.clarity ?? 78;
         const width = Math.max(18, Math.max(box.widthRatio, 0.98 - box.xRatio) * canvas.width);
         const height = Math.max(box.fontSize * scale * 2.25, box.heightRatio * canvas.height * 2.1);
         context.fillStyle = "#ffffff";
         context.fillRect(Math.max(0, x - 3), Math.max(0, y - 6), width + 14, height + 10);
         context.fillStyle = "#111827";
-        context.font = `${Math.max(8, Math.round(box.fontSize * scale * editedPdfTextScale))}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
+        context.font = `${Math.max(8, Math.round(effectivePdfFontSize(box) * scale))}px ${fontStack(box.fontFamily)}`;
         context.textBaseline = "top";
-        context.shadowColor = "rgba(17, 24, 39, 0.28)";
-        context.shadowBlur = 1.2;
+        context.shadowColor = clarity >= 96 ? "transparent" : `rgba(17, 24, 39, ${Math.min(0.38, (100 - clarity) / 100).toFixed(2)})`;
+        context.shadowBlur = clarity >= 96 ? 0 : Math.max(0.2, ((100 - clarity) / 100) * 5.4);
         context.shadowOffsetX = 0.4;
         context.shadowOffsetY = 0.7;
         context.fillText(box.text || " ", textX, textY);
@@ -456,11 +495,12 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
     notes
       .filter((note) => note.pageMode === "all" || note.pageNumber === pageNumber)
       .forEach((note) => {
+        const clarity = note.clarity ?? 78;
         context.fillStyle = "#1f6f67";
-        context.font = `700 ${Math.max(10, Math.round(note.fontSize * scale))}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
+        context.font = `700 ${Math.max(10, Math.round(note.fontSize * scale))}px ${fontStack(note.fontFamily)}`;
         context.textBaseline = "top";
-        context.shadowColor = "rgba(31, 111, 103, 0.22)";
-        context.shadowBlur = 1.1;
+        context.shadowColor = clarity >= 96 ? "transparent" : `rgba(31, 111, 103, ${Math.min(0.32, ((100 - clarity) / 100) * 0.9).toFixed(2)})`;
+        context.shadowBlur = clarity >= 96 ? 0 : Math.max(0.2, ((100 - clarity) / 100) * 5);
         context.shadowOffsetX = 0.35;
         context.shadowOffsetY = 0.65;
         context.fillText(note.text || " ", note.xRatio * canvas.width, note.yRatio * canvas.height);
@@ -534,6 +574,9 @@ function buildTextBoxes(
       text: existing?.text ?? line.text,
       editXRatio: existing?.editXRatio,
       editYRatio: existing?.editYRatio,
+      editedFontSize: existing?.editedFontSize,
+      fontFamily: existing?.fontFamily,
+      clarity: existing?.clarity,
     };
   });
 }
@@ -662,6 +705,8 @@ export default function Home() {
   const [editPageMode, setEditPageMode] = useState("all");
   const [editPageNumber, setEditPageNumber] = useState(1);
   const [editFontSize, setEditFontSize] = useState(22);
+  const [editFontFamily, setEditFontFamily] = useState("system");
+  const [editClarity, setEditClarity] = useState(78);
   const [previewUrl, setPreviewUrl] = useState("");
   const [visualTexts, setVisualTexts] = useState<VisualText[]>([]);
   const [selectedTextId, setSelectedTextId] = useState("");
@@ -684,6 +729,9 @@ export default function Home() {
   const selectedVisualText = visualTexts.find((note) => note.id === selectedTextId);
   const currentTextBoxes = pdfTextBoxes.filter((box) => box.pageNumber === currentPage);
   const selectedPdfText = pdfTextBoxes.find((box) => box.id === selectedPdfTextId);
+  const styleFontSize = selectedPdfText ? Math.round(effectivePdfFontSize(selectedPdfText)) : selectedVisualText?.fontSize ?? editFontSize;
+  const styleFontFamily = selectedPdfText?.fontFamily ?? selectedVisualText?.fontFamily ?? editFontFamily;
+  const styleClarity = selectedPdfText?.clarity ?? selectedVisualText?.clarity ?? editClarity;
   const ready = files.length > 0;
   const accept = isPdfTool ? "application/pdf,.pdf" : "image/*";
 
@@ -857,6 +905,8 @@ export default function Home() {
       pageMode: editPageMode,
       pageNumber: editPageNumber,
       fontSize: editFontSize,
+      fontFamily: editFontFamily,
+      clarity: editClarity,
     };
     setVisualTexts((current) => [...current, note]);
     setSelectedTextId("");
@@ -890,6 +940,38 @@ export default function Home() {
 
   function updateSelectedPdfText(text: string) {
     setPdfTextBoxes((current) => current.map((box) => (box.id === selectedPdfTextId ? { ...box, text } : box)));
+  }
+
+  function updateTextStyle(updates: { fontSize?: number; fontFamily?: string; clarity?: number }) {
+    if (selectedPdfTextId) {
+      setPdfTextBoxes((current) =>
+        current.map((box) =>
+          box.id === selectedPdfTextId
+            ? {
+                ...box,
+                editedFontSize: updates.fontSize ?? box.editedFontSize,
+                fontFamily: updates.fontFamily ?? box.fontFamily,
+                clarity: updates.clarity ?? box.clarity,
+              }
+            : box,
+        ),
+      );
+    }
+
+    if (selectedTextId) {
+      setVisualTexts((current) =>
+        current.map((note) =>
+          note.id === selectedTextId
+            ? {
+                ...note,
+                fontSize: updates.fontSize ?? note.fontSize,
+                fontFamily: updates.fontFamily ?? note.fontFamily,
+                clarity: updates.clarity ?? note.clarity,
+              }
+            : note,
+        ),
+      );
+    }
   }
 
   function movePdfTextBox(id: string, xRatio: number, yRatio: number) {
@@ -942,7 +1024,7 @@ export default function Home() {
 
       if (activeTool === "pdf-edit") {
         if (editMode === "visual") {
-          const editedTextBoxes = pdfTextBoxes.filter((box) => box.text !== box.originalText);
+          const editedTextBoxes = pdfTextBoxes.filter(isPdfTextEdited);
           const pdf = await saveVisualEditorPdf(files[0], pdfTextBoxes, visualTexts);
           const outputUrl = URL.createObjectURL(pdf);
           setOutputs([{ name: `${fileBaseName(files[0].name)}-visual-edited.pdf`, size: pdf.size, url: outputUrl, blob: pdf }]);
@@ -1097,7 +1179,7 @@ export default function Home() {
                             <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
                             {editMode === "visual" &&
                               currentTextBoxes
-                                .filter((box) => box.text !== box.originalText)
+                                .filter(isPdfTextEdited)
                                 .map((box) => {
                                   const maskWidthRatio = Math.max(box.widthRatio, 0.98 - box.xRatio);
                                   const maskHeight = Math.max(24, box.fontSize * 2.4, box.heightRatio * canvasSize.height * 2.1);
@@ -1117,7 +1199,7 @@ export default function Home() {
                                 })}
                             {editMode === "visual" &&
                               currentTextBoxes.map((box) => {
-                                const changed = box.text !== box.originalText;
+                                const changed = isPdfTextEdited(box);
                                 const selected = selectedPdfTextId === box.id;
                                 const displayXRatio = changed ? (box.editXRatio ?? box.xRatio) : box.xRatio;
                                 const displayYRatio = changed ? (box.editYRatio ?? box.yRatio) : box.yRatio;
@@ -1185,8 +1267,9 @@ export default function Home() {
                                       top: `${displayYRatio * 100}%`,
                                       width: `${displayWidthRatio * 100}%`,
                                       height: `${displayHeight}px`,
-                                      fontSize: `${Math.max(8, box.fontSize * 1.35 * editedPdfTextScale)}px`,
-                                      textShadow: changed ? "0.4px 0.7px 1.2px rgba(17, 24, 39, 0.28)" : undefined,
+                                      fontFamily: fontStack(box.fontFamily),
+                                      fontSize: `${Math.max(8, effectivePdfFontSize(box) * 1.35)}px`,
+                                      textShadow: changed ? textShadow("dark", box.clarity) : undefined,
                                     }}
                                     title={box.originalText}
                                   >
@@ -1262,8 +1345,9 @@ export default function Home() {
                                     style={{
                                       left: `${note.xRatio * 100}%`,
                                       top: `${note.yRatio * 100}%`,
+                                      fontFamily: fontStack(note.fontFamily),
                                       fontSize: `${Math.min(24, Math.max(12, note.fontSize * 0.72))}px`,
-                                      textShadow: "0.35px 0.65px 1.1px rgba(31, 111, 103, 0.22)",
+                                      textShadow: textShadow("green", note.clarity),
                                     }}
                                     type="button"
                                   >
@@ -1334,6 +1418,53 @@ export default function Home() {
                       新增文字内容
                       <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" value={editText} onChange={(event) => setEditText(event.target.value)} />
                     </label>
+                    <label className="text-sm font-bold">
+                      字体
+                      <select
+                        className="mt-2 w-full rounded border border-[#cfc6b7] bg-white px-3 py-2"
+                        value={styleFontFamily}
+                        onChange={(event) => {
+                          setEditFontFamily(event.target.value);
+                          updateTextStyle({ fontFamily: event.target.value });
+                        }}
+                      >
+                        {fontOptions.map((font) => (
+                          <option key={font.value} value={font.value}>
+                            {font.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-sm font-bold">
+                      字号 {styleFontSize}
+                      <input
+                        className="mt-2 w-full accent-[#1f6f67]"
+                        min="8"
+                        max="48"
+                        type="range"
+                        value={styleFontSize}
+                        onChange={(event) => {
+                          const nextSize = Number(event.target.value);
+                          setEditFontSize(nextSize);
+                          updateTextStyle({ fontSize: nextSize });
+                        }}
+                      />
+                    </label>
+                    <label className="text-sm font-bold md:col-span-2">
+                      文字清晰度 {styleClarity}%
+                      <input
+                        className="mt-2 w-full accent-[#1f6f67]"
+                        min="40"
+                        max="100"
+                        type="range"
+                        value={styleClarity}
+                        onChange={(event) => {
+                          const nextClarity = Number(event.target.value);
+                          setEditClarity(nextClarity);
+                          updateTextStyle({ clarity: nextClarity });
+                        }}
+                      />
+                    </label>
                     <button
                       className={`rounded px-4 py-2 text-sm font-black md:col-span-2 ${
                         placingText ? "bg-[#f0b35a] text-[#3a2404]" : "bg-[#1f6f67] text-white hover:bg-[#15534d]"
@@ -1357,10 +1488,6 @@ export default function Home() {
                     <label className="text-sm font-bold">
                       页码
                       <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2 disabled:bg-[#eee8dd]" disabled={editPageMode === "all"} min="1" type="number" value={editPageNumber} onChange={(event) => setEditPageNumber(Number(event.target.value))} />
-                    </label>
-                    <label className="text-sm font-bold md:col-span-2">
-                      字号 {editFontSize}
-                      <input className="mt-2 w-full accent-[#1f6f67]" min="10" max="72" type="range" value={editFontSize} onChange={(event) => setEditFontSize(Number(event.target.value))} />
                     </label>
                     {selectedVisualText && (
                       <div className="rounded border border-[#d8d1c3] bg-[#fbfaf6] p-3 md:col-span-2">
