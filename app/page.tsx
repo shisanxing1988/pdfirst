@@ -5,6 +5,7 @@ import { decodePDFRawStream, PDFDocument, PDFName, PDFRawStream, StandardFonts, 
 
 type ToolId = "compress" | "convert" | "image-pdf" | "pdf-merge" | "pdf-split" | "pdf-compress" | "pdf-edit";
 type ToolKind = "image" | "pdf";
+type EditorTool = "select" | "edit-text" | "add-text" | "highlight";
 
 type OutputFile = {
   name: string;
@@ -40,6 +41,16 @@ type PdfTextBox = {
   editedFontSize?: number;
   fontFamily?: string;
   clarity?: number;
+};
+
+type HighlightMark = {
+  id: string;
+  pageNumber: number;
+  xRatio: number;
+  yRatio: number;
+  widthRatio: number;
+  heightRatio: number;
+  color: string;
 };
 
 const tools: Array<{
@@ -453,9 +464,9 @@ async function saveSelectedTextEdits(file: File, boxes: PdfTextBox[]) {
   return new Blob([bytes], { type: "application/pdf" });
 }
 
-async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: VisualText[]) {
+async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: VisualText[], highlights: HighlightMark[]) {
   const changedBoxes = boxes.filter(isPdfTextEdited);
-  if (changedBoxes.length === 0 && notes.length === 0) throw new Error("请先点击 PDF 里的文字并修改内容，或添加新文字。");
+  if (changedBoxes.length === 0 && notes.length === 0 && highlights.length === 0) throw new Error("请先点击 PDF 里的文字并修改内容，或添加新文字/高亮。");
 
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.mjs";
@@ -473,6 +484,16 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     await page.render({ canvas, canvasContext: context, viewport }).promise;
+
+    highlights
+      .filter((mark) => mark.pageNumber === pageNumber)
+      .forEach((mark) => {
+        context.save();
+        context.globalAlpha = 0.45;
+        context.fillStyle = mark.color;
+        context.fillRect(mark.xRatio * canvas.width, mark.yRatio * canvas.height, mark.widthRatio * canvas.width, mark.heightRatio * canvas.height);
+        context.restore();
+      });
 
     changedBoxes
       .filter((box) => box.pageNumber === pageNumber)
@@ -719,9 +740,14 @@ export default function Home() {
   const [editablePdfUrl, setEditablePdfUrl] = useState("");
   const [previewingOutput, setPreviewingOutput] = useState(false);
   const [visualTexts, setVisualTexts] = useState<VisualText[]>([]);
+  const [highlights, setHighlights] = useState<HighlightMark[]>([]);
+  const [draftHighlight, setDraftHighlight] = useState<HighlightMark | null>(null);
+  const [editorTool, setEditorTool] = useState<EditorTool>("edit-text");
   const [selectedTextId, setSelectedTextId] = useState("");
   const [placingText, setPlacingText] = useState(false);
   const [pdfTextBoxes, setPdfTextBoxes] = useState<PdfTextBox[]>([]);
+  const [thumbnailUrls, setThumbnailUrls] = useState<string[]>([]);
+  const [zoom, setZoom] = useState(1.35);
   const [selectedPdfTextId, setSelectedPdfTextId] = useState("");
   const [pdfPageCount, setPdfPageCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
@@ -732,6 +758,7 @@ export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragTextRef = useRef<{ id: string; dx: number; dy: number; height: number; moved: boolean } | null>(null);
   const dragPdfTextRef = useRef<{ id: string; dx: number; dy: number; moved: boolean } | null>(null);
+  const highlightDragRef = useRef<{ xRatio: number; yRatio: number } | null>(null);
   const suppressPdfTextClickRef = useRef(false);
 
   const selectedTool = useMemo(() => tools.find((tool) => tool.id === activeTool) ?? tools[0], [activeTool]);
@@ -761,7 +788,7 @@ export default function Home() {
         const pdf = await documentTask.promise;
         const pageNumber = Math.max(1, Math.min(currentPage, pdf.numPages));
         const page = await pdf.getPage(pageNumber);
-        const viewport = page.getViewport({ scale: 1.35 });
+        const viewport = page.getViewport({ scale: zoom });
         const context = canvas.getContext("2d");
 
         if (!context || cancelled) return;
@@ -789,7 +816,56 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [activeTool, currentPage, editMode, previewUrl, previewingOutput]);
+  }, [activeTool, currentPage, editMode, previewUrl, previewingOutput, zoom]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const createdUrls: string[] = [];
+
+    async function renderThumbnails() {
+      if (!previewUrl || activeTool !== "pdf-edit") {
+        setThumbnailUrls([]);
+        return;
+      }
+
+      try {
+        const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.mjs";
+        const data = await fetch(previewUrl).then((response) => response.arrayBuffer());
+        const pdf = await pdfjsLib.getDocument({ data }).promise;
+        const nextUrls: string[] = [];
+
+        for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+          const page = await pdf.getPage(pageNumber);
+          const viewport = page.getViewport({ scale: 0.22 });
+          const canvas = document.createElement("canvas");
+          const context = canvas.getContext("2d");
+          if (!context) continue;
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          await page.render({ canvas, canvasContext: context, viewport }).promise;
+          const url = canvas.toDataURL("image/jpeg", 0.72);
+          createdUrls.push(url);
+          nextUrls.push(url);
+        }
+
+        if (!cancelled) setThumbnailUrls(nextUrls);
+      } catch {
+        if (!cancelled) setThumbnailUrls([]);
+      }
+    }
+
+    renderThumbnails();
+    return () => {
+      cancelled = true;
+      setThumbnailUrls((current) => {
+        current.forEach((url) => {
+          if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+        });
+        return [];
+      });
+    };
+  }, [activeTool, previewUrl]);
 
   function clearOutputs() {
     setOutputs((current) => {
@@ -805,6 +881,7 @@ export default function Home() {
     });
     setEditablePdfUrl("");
     setPreviewingOutput(false);
+    setThumbnailUrls([]);
   }
 
   function updateOutputName(url: string, name: string) {
@@ -832,6 +909,7 @@ export default function Home() {
     setEditMode("visual");
     setPreviewUrl(output.url);
     setPreviewingOutput(true);
+    setEditorTool("select");
     setSelectedPdfTextId("");
     setSelectedTextId("");
     setPlacingText(false);
@@ -848,6 +926,7 @@ export default function Home() {
     if (!nextUrl) return;
     setPreviewUrl(nextUrl);
     setPreviewingOutput(false);
+    setEditorTool("edit-text");
     setSelectedPdfTextId("");
     setSelectedTextId("");
     setPlacingText(false);
@@ -858,6 +937,7 @@ export default function Home() {
   function startTextPlacement() {
     if (!previewUrl || previewingOutput) return;
     setPlacingText(true);
+    setEditorTool("add-text");
     setSelectedPdfTextId("");
     setSelectedTextId("");
     setEditMode("visual");
@@ -866,6 +946,7 @@ export default function Home() {
 
   function stopTextPlacement() {
     setPlacingText(false);
+    setEditorTool("edit-text");
     setMessage("已取消添加文字。");
   }
 
@@ -930,12 +1011,16 @@ export default function Home() {
     clearOutputs();
     clearPreview();
     setVisualTexts([]);
+    setHighlights([]);
+    setDraftHighlight(null);
+    setEditorTool("edit-text");
     setSelectedTextId("");
     setPlacingText(false);
     setPdfTextBoxes([]);
     setSelectedPdfTextId("");
     setPdfPageCount(0);
     setCurrentPage(1);
+    setZoom(1.35);
     if (picked.length > 0 && selectedTool.kind === "pdf") {
       const nextUrl = URL.createObjectURL(picked[0]);
       setEditablePdfUrl(nextUrl);
@@ -957,12 +1042,16 @@ export default function Home() {
     clearOutputs();
     clearPreview();
     setVisualTexts([]);
+    setHighlights([]);
+    setDraftHighlight(null);
+    setEditorTool("edit-text");
     setSelectedTextId("");
     setPlacingText(false);
     setPdfTextBoxes([]);
     setSelectedPdfTextId("");
     setPdfPageCount(0);
     setCurrentPage(1);
+    setZoom(1.35);
     setMessage("选择文件后，再点击处理按钮生成下载文件。");
   }
 
@@ -984,6 +1073,55 @@ export default function Home() {
     setSelectedTextId("");
     setMessage("已在页面上添加文字。需要调整时可拖动文字框，或点击文字后修改。");
     setPlacingText(false);
+  }
+
+  function startHighlight(event: React.PointerEvent<HTMLDivElement>) {
+    if (!previewUrl || previewingOutput || editorTool !== "highlight") return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const xRatio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const yRatio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+    event.currentTarget.setPointerCapture(event.pointerId);
+    highlightDragRef.current = { xRatio, yRatio };
+    setSelectedPdfTextId("");
+    setSelectedTextId("");
+    setDraftHighlight({
+      id: "draft-highlight",
+      pageNumber: currentPage,
+      xRatio,
+      yRatio,
+      widthRatio: 0,
+      heightRatio: 0,
+      color: "#fff200",
+    });
+  }
+
+  function moveHighlight(event: React.PointerEvent<HTMLDivElement>) {
+    const start = highlightDragRef.current;
+    if (!start || editorTool !== "highlight") return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const xRatio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const yRatio = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+    setDraftHighlight({
+      id: "draft-highlight",
+      pageNumber: currentPage,
+      xRatio: Math.min(start.xRatio, xRatio),
+      yRatio: Math.min(start.yRatio, yRatio),
+      widthRatio: Math.abs(xRatio - start.xRatio),
+      heightRatio: Math.abs(yRatio - start.yRatio),
+      color: "#fff200",
+    });
+  }
+
+  function finishHighlight(event: React.PointerEvent<HTMLDivElement>) {
+    const draft = draftHighlight;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    highlightDragRef.current = null;
+    setDraftHighlight(null);
+    if (!draft || draft.widthRatio < 0.01 || draft.heightRatio < 0.006) return;
+    setHighlights((current) => [...current, { ...draft, id: crypto.randomUUID() }]);
+    setMessage("已添加高亮标记。");
   }
 
   function updateSelectedText(updates: Partial<VisualText>) {
@@ -1097,7 +1235,7 @@ export default function Home() {
       if (activeTool === "pdf-edit") {
         if (editMode === "visual") {
           const editedTextBoxes = pdfTextBoxes.filter(isPdfTextEdited);
-          const pdf = await saveVisualEditorPdf(files[0], pdfTextBoxes, visualTexts);
+          const pdf = await saveVisualEditorPdf(files[0], pdfTextBoxes, visualTexts, highlights);
           const outputUrl = URL.createObjectURL(pdf);
           setOutputs([{ name: `${fileBaseName(files[0].name)}-visual-edited.pdf`, size: pdf.size, url: outputUrl, blob: pdf }]);
           setMessage(editedTextBoxes.length > 0 ? "文字块编辑已生成。左侧仍可继续修改；需要查看最终文件时点下方预览。" : "PDF 已生成。左侧仍可继续修改；需要查看最终文件时点下方预览。");
@@ -1252,9 +1390,24 @@ export default function Home() {
                             <input className="sr-only" type="file" accept={accept} onChange={handleFiles} />
                           </label>
                           <button
-                            className={`rounded px-3 py-2 font-black ${!placingText && !previewingOutput ? "bg-[#1f6f67] text-white" : "border border-[#cfc6b7] bg-white text-[#18201f]"}`}
+                            className={`rounded px-3 py-2 font-black ${editorTool === "select" && !previewingOutput ? "bg-[#1f6f67] text-white" : "border border-[#cfc6b7] bg-white text-[#18201f]"}`}
                             disabled={previewingOutput}
                             onClick={() => {
+                              setEditorTool("select");
+                              setPlacingText(false);
+                              setSelectedTextId("");
+                              setSelectedPdfTextId("");
+                              setMessage("已切换为选择模式。");
+                            }}
+                            type="button"
+                          >
+                            选择
+                          </button>
+                          <button
+                            className={`rounded px-3 py-2 font-black ${editorTool === "edit-text" && !previewingOutput ? "bg-[#1f6f67] text-white" : "border border-[#cfc6b7] bg-white text-[#18201f]"}`}
+                            disabled={previewingOutput}
+                            onClick={() => {
+                              setEditorTool("edit-text");
                               setPlacingText(false);
                               setSelectedTextId("");
                               setEditMode("visual");
@@ -1265,12 +1418,26 @@ export default function Home() {
                             编辑文字
                           </button>
                           <button
-                            className={`rounded px-3 py-2 font-black ${placingText ? "bg-[#f0b35a] text-[#3a2404]" : "border border-[#cfc6b7] bg-white text-[#18201f]"}`}
+                            className={`rounded px-3 py-2 font-black ${editorTool === "add-text" ? "bg-[#f0b35a] text-[#3a2404]" : "border border-[#cfc6b7] bg-white text-[#18201f]"}`}
                             disabled={previewingOutput}
                             onClick={placingText ? stopTextPlacement : startTextPlacement}
                             type="button"
                           >
                             {placingText ? "取消添加" : "添加文字"}
+                          </button>
+                          <button
+                            className={`rounded px-3 py-2 font-black ${editorTool === "highlight" ? "bg-[#fff200] text-[#18201f]" : "border border-[#cfc6b7] bg-white text-[#18201f]"}`}
+                            disabled={previewingOutput}
+                            onClick={() => {
+                              setEditorTool("highlight");
+                              setPlacingText(false);
+                              setSelectedTextId("");
+                              setSelectedPdfTextId("");
+                              setMessage("拖拽页面区域即可添加高亮。");
+                            }}
+                            type="button"
+                          >
+                            高亮
                           </button>
                           <select
                             className="rounded border border-[#cfc6b7] bg-white px-3 py-2 font-bold disabled:opacity-50"
@@ -1330,19 +1497,58 @@ export default function Home() {
                             下一页
                           </button>
                         </div>
-                        <div className="h-[calc(100vh-142px)] min-h-[680px] overflow-auto bg-[#252a29] p-4">
-                          <div
-                            className={`relative mx-auto bg-white shadow-lg ${placingText ? "cursor-crosshair" : ""}`}
+                        <div className="grid h-[calc(100vh-142px)] min-h-[680px] grid-cols-[148px_minmax(0,1fr)] bg-[#252a29]">
+                          <div className="overflow-y-auto border-r border-[#cbd8ee] bg-[#eaf1ff] p-3">
+                            <div className="grid gap-4">
+                              {thumbnailUrls.length > 0 ? (
+                                thumbnailUrls.map((url, index) => (
+                                  <button
+                                    className={`rounded border bg-white p-2 shadow-sm transition ${currentPage === index + 1 ? "border-[#1f6f67] ring-2 ring-[#1f6f67]" : "border-white hover:border-[#6f8fc8]"}`}
+                                    key={`${url}-${index}`}
+                                    onClick={() => setCurrentPage(index + 1)}
+                                    type="button"
+                                  >
+                                    <img alt={`第 ${index + 1} 页`} className="mx-auto w-full" src={url} />
+                                    <span className="mt-2 block text-xs font-black text-[#4f5a55]">{index + 1}</span>
+                                  </button>
+                                ))
+                              ) : (
+                                <span className="text-center text-xs font-bold text-[#66706c]">页面加载中</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="relative overflow-auto bg-[#252a29] p-4">
+                            <div
+                            className={`relative mx-auto bg-white shadow-lg ${editorTool === "highlight" || placingText ? "cursor-crosshair" : ""}`}
                             onClick={(event: MouseEvent<HTMLDivElement>) => {
-                              if (editMode === "visual" && placingText) addVisualText(event);
-                              if (editMode === "visual" && !placingText) {
+                              if (editMode === "visual" && editorTool === "add-text" && placingText) addVisualText(event);
+                              if (editMode === "visual" && editorTool !== "add-text" && editorTool !== "highlight") {
                                 setSelectedPdfTextId("");
                                 setSelectedTextId("");
                               }
                             }}
+                            onPointerDown={startHighlight}
+                            onPointerMove={moveHighlight}
+                            onPointerUp={finishHighlight}
                             style={{ width: canvasSize.width || 620, height: canvasSize.height || 820 }}
                           >
                             <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+                            {!previewingOutput &&
+                              [...highlights.filter((mark) => mark.pageNumber === currentPage), ...(draftHighlight?.pageNumber === currentPage ? [draftHighlight] : [])].map((mark) => (
+                                <div
+                                  aria-hidden="true"
+                                  className="pointer-events-none absolute"
+                                  key={mark.id}
+                                  style={{
+                                    backgroundColor: mark.color,
+                                    height: `${mark.heightRatio * 100}%`,
+                                    left: `${mark.xRatio * 100}%`,
+                                    opacity: 0.45,
+                                    top: `${mark.yRatio * 100}%`,
+                                    width: `${mark.widthRatio * 100}%`,
+                                  }}
+                                />
+                              ))}
                             {editMode === "visual" &&
                               !previewingOutput &&
                               currentTextBoxes
@@ -1384,7 +1590,12 @@ export default function Home() {
                                     }`}
                                     key={box.id}
                                     onClick={(event) => {
+                                      if (editorTool === "highlight") return;
                                       event.stopPropagation();
+                                      if (editorTool !== "edit-text") {
+                                        setMessage("选择模式下可移动已修改的文字块。");
+                                        return;
+                                      }
                                       if (suppressPdfTextClickRef.current) {
                                         suppressPdfTextClickRef.current = false;
                                         return;
@@ -1393,6 +1604,8 @@ export default function Home() {
                                       setSelectedTextId("");
                                     }}
                                     onPointerDown={(event) => {
+                                      if (editorTool === "highlight") return;
+                                      if (editorTool !== "select" && editorTool !== "edit-text") return;
                                       if (!changed || selected) return;
                                       event.stopPropagation();
                                       const rect = event.currentTarget.getBoundingClientRect();
@@ -1469,11 +1682,13 @@ export default function Home() {
                                     }`}
                                     key={note.id}
                                     onClick={(event) => {
+                                      if (editorTool === "highlight") return;
                                       event.stopPropagation();
                                       setSelectedTextId(note.id);
                                       setSelectedPdfTextId("");
                                     }}
                                     onPointerDown={(event) => {
+                                      if (editorTool === "highlight") return;
                                       event.stopPropagation();
                                       const parent = event.currentTarget.parentElement;
                                       if (!parent) return;
@@ -1524,7 +1739,25 @@ export default function Home() {
                                   </button>
                                 ))}
                           </div>
+                            <div className="sticky bottom-4 z-20 mx-auto mt-4 flex w-fit items-center gap-3 rounded border border-[#d7dde8] bg-white px-4 py-2 text-sm font-black text-[#18201f] shadow-lg">
+                              <button className="rounded px-2 py-1 hover:bg-[#eef2f7]" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} type="button">
+                                上一页
+                              </button>
+                              <span>{currentPage} / {pdfPageCount || 1}</span>
+                              <button className="rounded px-2 py-1 hover:bg-[#eef2f7]" disabled={pdfPageCount > 0 && currentPage >= pdfPageCount} onClick={() => setCurrentPage((page) => Math.min(pdfPageCount || page + 1, page + 1))} type="button">
+                                下一页
+                              </button>
+                              <span className="h-5 w-px bg-[#d7dde8]" />
+                              <button className="rounded px-2 py-1 hover:bg-[#eef2f7]" onClick={() => setZoom((value) => Math.max(0.8, Number((value - 0.15).toFixed(2))))} type="button">
+                                -
+                              </button>
+                              <span>{Math.round((zoom / 1.35) * 100)}%</span>
+                              <button className="rounded px-2 py-1 hover:bg-[#eef2f7]" onClick={() => setZoom((value) => Math.min(2.7, Number((value + 0.15).toFixed(2))))} type="button">
+                                +
+                              </button>
+                            </div>
                         </div>
+                      </div>
                       </div>
                     ) : (
                       <div className="grid h-[calc(100vh-80px)] min-h-[720px] place-items-center bg-[#252a29] px-6 text-center text-white">
