@@ -1152,9 +1152,30 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-[#f7f4ee] text-[#18201f]">
-      <section className="border-b border-[#d8d1c3] bg-[#fbfaf6]">
-        <div className="mx-auto grid max-w-7xl gap-8 px-5 py-8 lg:grid-cols-[0.9fr_1.1fr] lg:px-8">
-          <div className="flex flex-col justify-between gap-8">
+      <section className={`border-b border-[#d8d1c3] ${activeTool === "pdf-edit" ? "bg-[#eef2f7]" : "bg-[#fbfaf6]"}`}>
+        <div className={activeTool === "pdf-edit" ? "mx-auto grid min-h-screen max-w-none gap-0 px-0 py-0 lg:grid-cols-[104px_minmax(0,1fr)]" : "mx-auto grid max-w-7xl gap-8 px-5 py-8 lg:grid-cols-[0.9fr_1.1fr] lg:px-8"}>
+          {activeTool === "pdf-edit" && (
+            <aside className="hidden border-r border-[#163461] bg-[#08245a] px-3 py-4 text-white lg:block">
+              <div className="mb-5 grid h-16 place-items-center rounded bg-white/10 text-lg font-black">轻</div>
+              <div className="grid gap-2">
+                {tools.map((tool) => (
+                  <button
+                    className={`grid min-h-20 place-items-center rounded px-2 py-3 text-center text-sm font-black transition ${
+                      activeTool === tool.id ? "bg-[#355fa8] text-white" : "text-white/86 hover:bg-white/10"
+                    }`}
+                    key={tool.id}
+                    onClick={() => selectTool(tool.id)}
+                    type="button"
+                  >
+                    <span className="text-xl">{tool.kind === "pdf" ? "PDF" : "IMG"}</span>
+                    <span>{tool.title.replace("PDF ", "").replace("图片", "")}</span>
+                  </button>
+                ))}
+              </div>
+            </aside>
+          )}
+
+          <div className={activeTool === "pdf-edit" ? "hidden" : "flex flex-col justify-between gap-8"}>
             <header className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 <div className="grid h-10 w-10 place-items-center rounded bg-[#1f6f67] text-lg font-black text-white">P</div>
@@ -1194,8 +1215,8 @@ export default function Home() {
             </div>
           </div>
 
-          <div className={`rounded border border-[#cfc6b7] bg-white p-4 shadow-sm ${activeTool === "pdf-edit" ? "lg:col-span-2" : ""}`}>
-            <div className="mb-4 flex items-center justify-between gap-4 border-b border-[#ebe5da] pb-3">
+          <div className={activeTool === "pdf-edit" ? "min-w-0 bg-white p-0" : "rounded border border-[#cfc6b7] bg-white p-4 shadow-sm"}>
+            <div className={activeTool === "pdf-edit" ? "flex min-h-16 items-center justify-between gap-4 border-b border-[#d7dde8] bg-white px-4 py-3" : "mb-4 flex items-center justify-between gap-4 border-b border-[#ebe5da] pb-3"}>
               <div>
                 <h3 className="font-black">在线处理台</h3>
                 <p className="text-sm text-[#66706c]">{selectedTool.description}</p>
@@ -1203,27 +1224,33 @@ export default function Home() {
               <span className="shrink-0 rounded bg-[#f0b35a] px-3 py-1 text-xs font-black text-[#3a2404]">可用</span>
             </div>
 
-            <div className={activeTool === "pdf-edit" ? "grid gap-4 xl:grid-cols-[1.2fr_0.8fr]" : ""}>
-              <div>
-                <label
-                  className={`grid min-h-44 cursor-pointer place-items-center rounded border-2 border-dashed p-6 text-center transition hover:border-[#1f6f67] ${
-                    files.length > 0 ? "border-[#1f6f67] bg-[#eef7f4]" : "border-[#b9afa0] bg-[#fbfaf6]"
-                  }`}
-                >
-                  <input className="sr-only" multiple={activeTool !== "pdf-compress" && activeTool !== "pdf-edit"} type="file" accept={accept} onChange={handleFiles} />
-                  <span>
-                    <strong className="block text-xl">{files.length > 0 ? `已选择 ${files.length} 个文件` : isPdfTool ? "选择 PDF 文件" : "选择图片文件"}</strong>
-                    <span className="mt-2 block text-sm text-[#66706c]">
-                      {files.length > 0 ? "可以继续点这里重新选择" : isPdfTool ? "支持 PDF 文件，当前仍在浏览器本地处理" : "支持批量选择，当前不上云处理"}
+            <div className={activeTool === "pdf-edit" ? "grid gap-0 xl:grid-cols-[minmax(0,1fr)_340px]" : ""}>
+              <div className="min-w-0">
+                {activeTool !== "pdf-edit" && (
+                  <label
+                    className={`grid min-h-44 cursor-pointer place-items-center rounded border-2 border-dashed p-6 text-center transition hover:border-[#1f6f67] ${
+                      files.length > 0 ? "border-[#1f6f67] bg-[#eef7f4]" : "border-[#b9afa0] bg-[#fbfaf6]"
+                    }`}
+                  >
+                    <input className="sr-only" multiple={activeTool !== "pdf-compress" && activeTool !== "pdf-edit"} type="file" accept={accept} onChange={handleFiles} />
+                    <span>
+                      <strong className="block text-xl">{files.length > 0 ? `已选择 ${files.length} 个文件` : isPdfTool ? "选择 PDF 文件" : "选择图片文件"}</strong>
+                      <span className="mt-2 block text-sm text-[#66706c]">
+                        {files.length > 0 ? "可以继续点这里重新选择" : isPdfTool ? "支持 PDF 文件，当前仍在浏览器本地处理" : "支持批量选择，当前不上云处理"}
+                      </span>
                     </span>
-                  </span>
-                </label>
+                  </label>
+                )}
 
                 {activeTool === "pdf-edit" && (
-                  <div className="mt-4 overflow-hidden rounded border border-[#d8d1c3] bg-[#252a29]">
+                  <div className="overflow-hidden bg-[#252a29]">
                     {previewUrl ? (
                       <div>
                         <div className="flex flex-wrap items-center gap-2 border-b border-white/10 bg-[#f7f4ee] px-3 py-3 text-sm">
+                          <label className="cursor-pointer rounded border border-[#cfc6b7] bg-white px-3 py-2 font-black text-[#18201f] hover:border-[#1f6f67]">
+                            重新上传
+                            <input className="sr-only" type="file" accept={accept} onChange={handleFiles} />
+                          </label>
                           <button
                             className={`rounded px-3 py-2 font-black ${!placingText && !previewingOutput ? "bg-[#1f6f67] text-white" : "border border-[#cfc6b7] bg-white text-[#18201f]"}`}
                             disabled={previewingOutput}
@@ -1303,7 +1330,7 @@ export default function Home() {
                             下一页
                           </button>
                         </div>
-                        <div className="h-[560px] overflow-auto bg-[#252a29] p-4">
+                        <div className="h-[calc(100vh-142px)] min-h-[680px] overflow-auto bg-[#252a29] p-4">
                           <div
                             className={`relative mx-auto bg-white shadow-lg ${placingText ? "cursor-crosshair" : ""}`}
                             onClick={(event: MouseEvent<HTMLDivElement>) => {
@@ -1500,18 +1527,21 @@ export default function Home() {
                         </div>
                       </div>
                     ) : (
-                      <div className="grid h-[560px] place-items-center px-6 text-center text-white">
-                        <div>
-                          <strong className="block text-2xl">打开一个 PDF</strong>
-                          <span className="mt-2 block text-sm text-[#d7dedb]">选择文件后会在这里预览，再点击页面添加文字。</span>
-                        </div>
+                      <div className="grid h-[calc(100vh-80px)] min-h-[720px] place-items-center bg-[#252a29] px-6 text-center text-white">
+                        <label className="grid min-h-72 w-full max-w-xl cursor-pointer place-items-center rounded border-2 border-dashed border-white/35 bg-white/5 p-8 transition hover:border-[#f0b35a] hover:bg-white/10">
+                          <input className="sr-only" type="file" accept={accept} onChange={handleFiles} />
+                          <span>
+                            <strong className="block text-3xl">打开 PDF</strong>
+                            <span className="mt-3 block text-sm text-[#d7dedb]">选择文件后直接进入大画布编辑</span>
+                          </span>
+                        </label>
                       </div>
                     )}
                   </div>
                 )}
               </div>
 
-              <div>
+              <div className={activeTool === "pdf-edit" ? "border-l border-[#d7dde8] bg-[#fbfaf6] p-4" : ""}>
             {!isPdfTool && (
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <label className="text-sm font-bold">
@@ -1692,13 +1722,15 @@ export default function Home() {
               </p>
             )}
 
-            <button
-              className="mt-4 w-full rounded bg-[#1f6f67] px-5 py-3 font-black text-white transition hover:bg-[#15534d] disabled:cursor-not-allowed disabled:bg-[#a5aaa6]"
-              disabled={!ready || busy}
-              onClick={processFiles}
-            >
-              {busy ? "处理中..." : files.length > 0 ? (activeTool === "pdf-edit" ? "保存 PDF" : "处理已选择文件") : isPdfTool ? "先选择 PDF 文件" : "先选择图片文件"}
-            </button>
+            {activeTool !== "pdf-edit" && (
+              <button
+                className="mt-4 w-full rounded bg-[#1f6f67] px-5 py-3 font-black text-white transition hover:bg-[#15534d] disabled:cursor-not-allowed disabled:bg-[#a5aaa6]"
+                disabled={!ready || busy}
+                onClick={processFiles}
+              >
+                {busy ? "处理中..." : files.length > 0 ? "处理已选择文件" : isPdfTool ? "先选择 PDF 文件" : "先选择图片文件"}
+              </button>
+            )}
 
             <p className="mt-3 text-sm text-[#66706c]">{message}</p>
             {files.length > 0 && (
