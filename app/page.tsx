@@ -1787,7 +1787,7 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-[#f7f4ee] text-[#18201f]">
         <section className="border-b border-[#d8d1c3] bg-[#fbfaf6]">
-          <div className="mx-auto grid min-h-[78vh] max-w-7xl gap-10 px-5 py-8 lg:grid-cols-[0.9fr_1.1fr] lg:px-8">
+          <div className="mx-auto flex min-h-[62vh] max-w-7xl flex-col justify-between gap-10 px-5 py-8 lg:px-8">
             <div className="flex flex-col justify-between gap-8">
               <header className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
@@ -1802,17 +1802,17 @@ export default function Home() {
                 </a>
               </header>
 
-              <div className="max-w-2xl">
+              <div className="max-w-3xl">
                 <p className="mb-4 inline-flex rounded bg-[#e7f0ce] px-3 py-1 text-sm font-bold text-[#3d5621]">PDF 核心功能已接入浏览器处理</p>
-                <h2 className="text-5xl font-black leading-tight tracking-normal md:text-6xl">
+                <h2 className="text-5xl font-black leading-tight tracking-normal md:text-7xl">
                   在线打开 PDF，编辑后保存。
                 </h2>
-                <p className="mt-5 max-w-xl text-lg leading-8 text-[#4f5a55]">
+                <p className="mt-5 max-w-2xl text-lg leading-8 text-[#4f5a55]">
                   首页负责展示和选择工具；具体上传、编辑、预览和保存都会在独立工作窗口里完成，给 PDF 编辑留出更大的操作空间。
                 </p>
               </div>
 
-              <div className="grid grid-cols-3 gap-3 text-sm">
+              <div className="grid max-w-2xl grid-cols-3 gap-3 text-sm">
                 <div className="border-t border-[#cfc6b7] pt-3">
                   <strong className="block text-2xl">10</strong>
                   <span className="text-[#66706c]">可用工具</span>
@@ -1824,32 +1824,6 @@ export default function Home() {
                 <div className="border-t border-[#cfc6b7] pt-3">
                   <strong className="block text-2xl">独立</strong>
                   <span className="text-[#66706c]">工作窗口</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid content-center gap-4">
-              <div className="rounded border border-[#cfc6b7] bg-white p-5 shadow-sm">
-                <div className="mb-4 flex items-center justify-between gap-4 border-b border-[#ebe5da] pb-3">
-                  <div>
-                    <h3 className="font-black">工具展示台</h3>
-                    <p className="text-sm text-[#66706c]">选择一个工具，会打开新的大窗口进行操作。</p>
-                  </div>
-                  <span className="shrink-0 rounded bg-[#f0b35a] px-3 py-1 text-xs font-black text-[#3a2404]">可用</span>
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  {tools.filter((tool) => ["pdf-edit", "pdf-word", "pdf-seal", "word-seal", "compress", "convert"].includes(tool.id)).map((tool) => (
-                    <button
-                      className="rounded border border-[#d8d1c3] bg-[#fbfaf6] p-4 text-left transition hover:border-[#1f6f67] hover:bg-white"
-                      key={tool.id}
-                      onClick={() => openToolWorkspace(tool.id)}
-                      type="button"
-                    >
-                      <span className="text-xs font-black text-[#1f6f67]">{toolKindLabel(tool.kind)}</span>
-                      <strong className="mt-2 block text-lg">{tool.title}</strong>
-                      <span className="mt-2 block text-sm leading-6 text-[#66706c]">{tool.description}</span>
-                    </button>
-                  ))}
                 </div>
               </div>
             </div>
