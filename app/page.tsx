@@ -1787,8 +1787,8 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-[#f7f4ee] text-[#18201f]">
         <section className="border-b border-[#d8d1c3] bg-[#fbfaf6]">
-          <div className="mx-auto flex min-h-[62vh] max-w-7xl flex-col justify-between gap-10 px-5 py-8 lg:px-8">
-            <div className="flex flex-col justify-between gap-8">
+          <div className="mx-auto flex max-w-7xl flex-col gap-10 px-5 py-8 lg:px-8">
+            <div className="flex flex-col gap-8">
               <header className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="grid h-10 w-10 place-items-center rounded bg-[#1f6f67] text-lg font-black text-white">P</div>
@@ -1802,13 +1802,13 @@ export default function Home() {
                 </a>
               </header>
 
-              <div className="max-w-3xl">
+              <div className="max-w-4xl">
                 <p className="mb-4 inline-flex rounded bg-[#e7f0ce] px-3 py-1 text-sm font-bold text-[#3d5621]">PDF 核心功能已接入浏览器处理</p>
-                <h2 className="text-5xl font-black leading-tight tracking-normal md:text-7xl">
-                  在线打开 PDF，编辑后保存。
+                <h2 className="text-4xl font-black leading-tight tracking-normal md:text-6xl">
+                  在线 PDF 编辑保存
                 </h2>
                 <p className="mt-5 max-w-2xl text-lg leading-8 text-[#4f5a55]">
-                  首页负责展示和选择工具；具体上传、编辑、预览和保存都会在独立工作窗口里完成，给 PDF 编辑留出更大的操作空间。
+                  首页只做工具选择；上传、编辑、预览和保存都在独立工作窗口里完成。
                 </p>
               </div>
 
