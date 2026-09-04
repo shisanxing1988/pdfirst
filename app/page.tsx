@@ -1,11 +1,12 @@
 "use client";
 
 import { ChangeEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
-import { decodePDFRawStream, PDFDocument, PDFName, PDFRawStream, StandardFonts, rgb } from "pdf-lib";
+import { decodePDFRawStream, PDFDocument, PDFName, PDFRawStream, StandardFonts, degrees, rgb } from "pdf-lib";
 
-type ToolId = "compress" | "convert" | "image-pdf" | "pdf-merge" | "pdf-split" | "pdf-compress" | "pdf-edit";
+type ToolId = "compress" | "convert" | "image-pdf" | "pdf-merge" | "pdf-split" | "pdf-compress" | "pdf-edit" | "pdf-seal";
 type ToolKind = "image" | "pdf";
 type EditorTool = "select" | "edit-text" | "add-text" | "highlight";
+type SealSide = "right" | "left" | "top" | "bottom";
 
 type OutputFile = {
   name: string;
@@ -108,6 +109,13 @@ const tools: Array<{
     title: "PDF 原文编辑",
     tag: "替换文字",
     description: "替换文本型 PDF 中可识别的原始文字，也支持添加批注文字。",
+  },
+  {
+    id: "pdf-seal",
+    kind: "pdf",
+    title: "PDF 骑缝章",
+    tag: "合同盖章",
+    description: "上传合同章图片，自动按页数切分并贴到 PDF 边缘。",
   },
 ];
 
@@ -375,6 +383,75 @@ async function optimizePdf(file: File) {
   const pages = await target.copyPages(source, source.getPageIndices());
   pages.forEach((page) => target.addPage(page));
   const bytes = await target.save({ useObjectStreams: true, objectsPerTick: 40 });
+  return new Blob([bytes], { type: "application/pdf" });
+}
+
+async function canvasToPngBytes(canvas: HTMLCanvasElement) {
+  const blob = await blobFromCanvas(canvas, "image/png", 1);
+  return readBytes(blob);
+}
+
+async function addSeamSealToPdf(
+  file: File,
+  sealFile: File,
+  options: { side: SealSide; size: number; offset: number; position: number; opacity: number; rotation: number },
+) {
+  const pdf = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
+  const pages = pdf.getPages();
+  if (pages.length === 0) throw new Error("PDF 没有可盖章页面。");
+
+  const sealImage = await createImageBitmap(sealFile);
+  const verticalSide = options.side === "left" || options.side === "right";
+  const fullWidth = verticalSide ? options.size : options.size * (sealImage.width / sealImage.height);
+  const fullHeight = verticalSide ? options.size * (sealImage.height / sealImage.width) : options.size;
+
+  for (let index = 0; index < pages.length; index += 1) {
+    const sliceCanvas = document.createElement("canvas");
+    const sliceContext = sliceCanvas.getContext("2d");
+    if (!sliceContext) throw new Error("浏览器不支持印章切分。");
+
+    if (verticalSide) {
+      const sourceWidth = sealImage.width / pages.length;
+      sliceCanvas.width = Math.max(1, Math.ceil(sourceWidth));
+      sliceCanvas.height = sealImage.height;
+      sliceContext.drawImage(sealImage, index * sourceWidth, 0, sourceWidth, sealImage.height, 0, 0, sliceCanvas.width, sliceCanvas.height);
+    } else {
+      const sourceHeight = sealImage.height / pages.length;
+      sliceCanvas.width = sealImage.width;
+      sliceCanvas.height = Math.max(1, Math.ceil(sourceHeight));
+      sliceContext.drawImage(sealImage, 0, index * sourceHeight, sealImage.width, sourceHeight, 0, 0, sliceCanvas.width, sliceCanvas.height);
+    }
+
+    const stamp = await pdf.embedPng(await canvasToPngBytes(sliceCanvas));
+    const page = pages[index];
+    const { width, height } = page.getSize();
+    const visibleWidth = verticalSide ? fullWidth / pages.length : fullWidth;
+    const visibleHeight = verticalSide ? fullHeight : fullHeight / pages.length;
+    const x =
+      options.side === "right"
+        ? width - visibleWidth - options.offset
+        : options.side === "left"
+          ? options.offset
+          : Math.max(0, Math.min(width - visibleWidth, (width - visibleWidth) * (options.position / 100)));
+    const y =
+      options.side === "top"
+        ? height - visibleHeight - options.offset
+        : options.side === "bottom"
+          ? options.offset
+          : Math.max(0, Math.min(height - visibleHeight, (height - visibleHeight) * (options.position / 100)));
+
+    page.drawImage(stamp, {
+      x,
+      y,
+      width: visibleWidth,
+      height: visibleHeight,
+      opacity: options.opacity / 100,
+      rotate: degrees(options.rotation),
+    });
+  }
+
+  sealImage.close();
+  const bytes = await pdf.save({ useObjectStreams: true });
   return new Blob([bytes], { type: "application/pdf" });
 }
 
@@ -736,6 +813,13 @@ export default function Home() {
   const [editFontSize, setEditFontSize] = useState(22);
   const [editFontFamily, setEditFontFamily] = useState("system");
   const [editClarity, setEditClarity] = useState(78);
+  const [sealFile, setSealFile] = useState<File | null>(null);
+  const [sealSide, setSealSide] = useState<SealSide>("right");
+  const [sealSize, setSealSize] = useState(168);
+  const [sealOffset, setSealOffset] = useState(0);
+  const [sealPosition, setSealPosition] = useState(50);
+  const [sealOpacity, setSealOpacity] = useState(86);
+  const [sealRotation, setSealRotation] = useState(0);
   const [previewUrl, setPreviewUrl] = useState("");
   const [editablePdfUrl, setEditablePdfUrl] = useState("");
   const [previewingOutput, setPreviewingOutput] = useState(false);
@@ -756,6 +840,7 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("文件只在你的浏览器里处理。");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sealInputRef = useRef<HTMLInputElement | null>(null);
   const dragTextRef = useRef<{ id: string; dx: number; dy: number; height: number; moved: boolean } | null>(null);
   const dragPdfTextRef = useRef<{ id: string; dx: number; dy: number; moved: boolean } | null>(null);
   const highlightDragRef = useRef<{ xRatio: number; yRatio: number } | null>(null);
@@ -1014,6 +1099,7 @@ export default function Home() {
     setHighlights([]);
     setDraftHighlight(null);
     setEditorTool("edit-text");
+    if (activeTool !== "pdf-seal") setSealFile(null);
     setSelectedTextId("");
     setPlacingText(false);
     setPdfTextBoxes([]);
@@ -1031,6 +1117,8 @@ export default function Home() {
       picked.length
         ? activeTool === "pdf-edit"
           ? "PDF 已打开。点击预览区域添加文字，或切换到原文替换模式。"
+          : activeTool === "pdf-seal"
+            ? "PDF 已选择。请继续上传合同章图片并调整骑缝章参数。"
           : `已选择 ${picked.length} 个文件，请点击下方按钮开始处理。`
         : "文件只在你的浏览器里处理。",
     );
@@ -1039,6 +1127,7 @@ export default function Home() {
   function selectTool(toolId: ToolId) {
     setActiveTool(toolId);
     setFiles([]);
+    setSealFile(null);
     clearOutputs();
     clearPreview();
     setVisualTexts([]);
@@ -1053,6 +1142,12 @@ export default function Home() {
     setCurrentPage(1);
     setZoom(1.35);
     setMessage("选择文件后，再点击处理按钮生成下载文件。");
+  }
+
+  function handleSealFile(event: ChangeEvent<HTMLInputElement>) {
+    const picked = event.target.files?.[0] ?? null;
+    setSealFile(picked);
+    setMessage(picked ? "合同章图片已选择，请调整参数后生成骑缝章 PDF。" : "请上传合同章图片。");
   }
 
   function addVisualText(event: React.MouseEvent<HTMLDivElement>) {
@@ -1232,6 +1327,22 @@ export default function Home() {
         return;
       }
 
+      if (activeTool === "pdf-seal") {
+        if (!sealFile) throw new Error("请先上传合同章图片，建议使用透明 PNG。");
+        const pdf = await addSeamSealToPdf(files[0], sealFile, {
+          side: sealSide,
+          size: sealSize,
+          offset: sealOffset,
+          position: sealPosition,
+          opacity: sealOpacity,
+          rotation: sealRotation,
+        });
+        const outputUrl = URL.createObjectURL(pdf);
+        setOutputs([{ name: `${fileBaseName(files[0].name)}-seam-seal.pdf`, size: pdf.size, url: outputUrl, blob: pdf }]);
+        setMessage("骑缝章 PDF 已生成。可先预览效果，再手动保存。");
+        return;
+      }
+
       if (activeTool === "pdf-edit") {
         if (editMode === "visual") {
           const editedTextBoxes = pdfTextBoxes.filter(isPdfTextEdited);
@@ -1339,7 +1450,7 @@ export default function Home() {
 
             <div className="grid grid-cols-3 gap-3 text-sm">
               <div className="border-t border-[#cfc6b7] pt-3">
-                <strong className="block text-2xl">7</strong>
+                <strong className="block text-2xl">8</strong>
                 <span className="text-[#66706c]">可用工具</span>
               </div>
               <div className="border-t border-[#cfc6b7] pt-3">
@@ -1955,13 +2066,61 @@ export default function Home() {
               </p>
             )}
 
+            {activeTool === "pdf-seal" && (
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <input ref={sealInputRef} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/*" aria-label="上传合同章图片" onChange={handleSealFile} />
+                <button
+                  className="grid min-h-32 cursor-pointer place-items-center rounded border-2 border-dashed border-[#b9afa0] bg-[#fbfaf6] p-5 text-center transition hover:border-[#1f6f67] md:col-span-2"
+                  onClick={() => sealInputRef.current?.click()}
+                  type="button"
+                >
+                  <span>
+                    <strong className="block text-lg">{sealFile ? sealFile.name : "上传合同章图片"}</strong>
+                    <span className="mt-2 block text-sm text-[#66706c]">推荐透明 PNG，红章效果最好</span>
+                  </span>
+                </button>
+                <label className="text-sm font-bold">
+                  盖章边缘
+                  <select className="mt-2 w-full rounded border border-[#cfc6b7] bg-white px-3 py-2" value={sealSide} onChange={(event) => setSealSide(event.target.value as SealSide)}>
+                    <option value="right">右侧骑缝</option>
+                    <option value="left">左侧骑缝</option>
+                    <option value="top">上侧骑缝</option>
+                    <option value="bottom">下侧骑缝</option>
+                  </select>
+                </label>
+                <label className="text-sm font-bold">
+                  章整体大小 {sealSize}
+                  <input className="mt-2 w-full accent-[#1f6f67]" type="range" min="80" max="320" value={sealSize} onChange={(event) => setSealSize(Number(event.target.value))} />
+                </label>
+                <label className="text-sm font-bold">
+                  边缘距离 {sealOffset}
+                  <input className="mt-2 w-full accent-[#1f6f67]" type="range" min="-24" max="80" value={sealOffset} onChange={(event) => setSealOffset(Number(event.target.value))} />
+                </label>
+                <label className="text-sm font-bold">
+                  位置 {sealPosition}%
+                  <input className="mt-2 w-full accent-[#1f6f67]" type="range" min="0" max="100" value={sealPosition} onChange={(event) => setSealPosition(Number(event.target.value))} />
+                </label>
+                <label className="text-sm font-bold">
+                  透明度 {sealOpacity}%
+                  <input className="mt-2 w-full accent-[#1f6f67]" type="range" min="20" max="100" value={sealOpacity} onChange={(event) => setSealOpacity(Number(event.target.value))} />
+                </label>
+                <label className="text-sm font-bold">
+                  旋转 {sealRotation}°
+                  <input className="mt-2 w-full accent-[#1f6f67]" type="range" min="-30" max="30" value={sealRotation} onChange={(event) => setSealRotation(Number(event.target.value))} />
+                </label>
+                <p className="rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12] md:col-span-2">
+                  真实骑缝章会把一张章图按页数切开，每页贴一段到边缘；打印后叠放页面，边缘可以拼出完整章。
+                </p>
+              </div>
+            )}
+
             {activeTool !== "pdf-edit" && (
               <button
                 className="mt-4 w-full rounded bg-[#1f6f67] px-5 py-3 font-black text-white transition hover:bg-[#15534d] disabled:cursor-not-allowed disabled:bg-[#a5aaa6]"
-                disabled={!ready || busy}
+                disabled={!ready || busy || (activeTool === "pdf-seal" && !sealFile)}
                 onClick={processFiles}
               >
-                {busy ? "处理中..." : files.length > 0 ? "处理已选择文件" : isPdfTool ? "先选择 PDF 文件" : "先选择图片文件"}
+                {busy ? "处理中..." : activeTool === "pdf-seal" ? (sealFile ? "生成骑缝章 PDF" : "先上传合同章图片") : files.length > 0 ? "处理已选择文件" : isPdfTool ? "先选择 PDF 文件" : "先选择图片文件"}
               </button>
             )}
 
