@@ -3,7 +3,7 @@
 import { ChangeEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { decodePDFRawStream, PDFDocument, PDFName, PDFRawStream, StandardFonts, degrees, rgb } from "pdf-lib";
 
-type ToolId = "compress" | "convert" | "image-pdf" | "pdf-merge" | "pdf-split" | "pdf-compress" | "pdf-edit" | "pdf-seal" | "word-seal";
+type ToolId = "compress" | "convert" | "image-pdf" | "pdf-merge" | "pdf-split" | "pdf-compress" | "pdf-edit" | "pdf-word" | "pdf-seal" | "word-seal";
 type ToolKind = "image" | "pdf" | "word";
 type EditorTool = "select" | "edit-text" | "add-text" | "highlight";
 type SealSide = "right" | "left" | "top" | "bottom";
@@ -109,6 +109,13 @@ const tools: Array<{
     title: "PDF 原文编辑",
     tag: "替换文字",
     description: "替换文本型 PDF 中可识别的原始文字，也支持添加批注文字。",
+  },
+  {
+    id: "pdf-word",
+    kind: "pdf",
+    title: "PDF 转 Word",
+    tag: "提取文字",
+    description: "从文字型 PDF 提取内容，生成可编辑的 Word 文档。",
   },
   {
     id: "pdf-seal",
@@ -221,6 +228,156 @@ function latin1Bytes(value: string) {
     bytes[index] = value.charCodeAt(index) & 0xff;
   }
   return bytes;
+}
+
+function xmlEscape(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function crc32(bytes: Uint8Array) {
+  let crc = -1;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+function createZip(entries: Array<{ name: string; content: string | Uint8Array }>) {
+  const chunks: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  const encoder = new TextEncoder();
+  let offset = 0;
+  const now = new Date();
+  const dosTime = ((now.getHours() & 0x1f) << 11) | ((now.getMinutes() & 0x3f) << 5) | ((Math.floor(now.getSeconds() / 2) & 0x1f));
+  const dosDate = (((now.getFullYear() - 1980) & 0x7f) << 9) | (((now.getMonth() + 1) & 0xf) << 5) | (now.getDate() & 0x1f);
+
+  function uint16(value: number) {
+    return [value & 0xff, (value >>> 8) & 0xff];
+  }
+
+  function uint32(value: number) {
+    return [value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff];
+  }
+
+  for (const entry of entries) {
+    const nameBytes = encoder.encode(entry.name);
+    const data = typeof entry.content === "string" ? encoder.encode(entry.content) : entry.content;
+    const checksum = crc32(data);
+    const localHeader = new Uint8Array([
+      ...uint32(0x04034b50),
+      ...uint16(20),
+      ...uint16(0),
+      ...uint16(0),
+      ...uint16(dosTime),
+      ...uint16(dosDate),
+      ...uint32(checksum),
+      ...uint32(data.length),
+      ...uint32(data.length),
+      ...uint16(nameBytes.length),
+      ...uint16(0),
+    ]);
+    chunks.push(localHeader, nameBytes, data);
+
+    const centralHeader = new Uint8Array([
+      ...uint32(0x02014b50),
+      ...uint16(20),
+      ...uint16(20),
+      ...uint16(0),
+      ...uint16(0),
+      ...uint16(dosTime),
+      ...uint16(dosDate),
+      ...uint32(checksum),
+      ...uint32(data.length),
+      ...uint32(data.length),
+      ...uint16(nameBytes.length),
+      ...uint16(0),
+      ...uint16(0),
+      ...uint16(0),
+      ...uint16(0),
+      ...uint32(0),
+      ...uint32(offset),
+    ]);
+    central.push(centralHeader, nameBytes);
+    offset += localHeader.length + nameBytes.length + data.length;
+  }
+
+  const centralOffset = offset;
+  const centralSize = central.reduce((size, chunk) => size + chunk.length, 0);
+  const endRecord = new Uint8Array([
+    ...uint32(0x06054b50),
+    ...uint16(0),
+    ...uint16(0),
+    ...uint16(entries.length),
+    ...uint16(entries.length),
+    ...uint32(centralSize),
+    ...uint32(centralOffset),
+    ...uint16(0),
+  ]);
+
+  return new Blob([...chunks, ...central, endRecord], { type: "application/zip" });
+}
+
+function paragraphsToDocx(paragraphs: string[]) {
+  const body = paragraphs
+    .map((paragraph) =>
+      paragraph === ""
+        ? "<w:p/>"
+        : `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(paragraph)}</w:t></w:r></w:p>`,
+    )
+    .join("");
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
+
+  return createZip([
+    {
+      name: "[Content_Types].xml",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
+    },
+    {
+      name: "_rels/.rels",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
+    },
+    { name: "word/document.xml", content: documentXml },
+  ]);
+}
+
+async function pdfToWord(file: File) {
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.mjs";
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const paragraphs: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    const lines = new Map<number, string[]>();
+
+    for (const item of textContent.items) {
+      if (!("str" in item) || !item.str.trim()) continue;
+      const transform = "transform" in item && Array.isArray(item.transform) ? item.transform : [0, 0, 0, 0, 0, 0];
+      const y = Math.round(Number(transform[5] ?? 0) / 6) * 6;
+      lines.set(y, [...(lines.get(y) ?? []), item.str]);
+    }
+
+    const pageLines = Array.from(lines.entries())
+      .sort((a, b) => b[0] - a[0])
+      .map(([, parts]) => parts.join("").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    if (pageNumber > 1) paragraphs.push("");
+    paragraphs.push(`第 ${pageNumber} 页`);
+    paragraphs.push(...pageLines);
+  }
+
+  if (paragraphs.length === 0) throw new Error("没有提取到文字。这个 PDF 可能是扫描件，需要后续 OCR 版本处理。");
+  return paragraphsToDocx(paragraphs);
 }
 
 async function imagesToPdf(files: File[]) {
@@ -1529,6 +1686,14 @@ export default function Home() {
         return;
       }
 
+      if (activeTool === "pdf-word") {
+        const docx = await pdfToWord(files[0]);
+        const output = new Blob([docx], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+        setOutputs([{ name: `${fileBaseName(files[0].name)}.docx`, size: output.size, url: URL.createObjectURL(output), blob: output }]);
+        setMessage("Word 文档已生成。文字型 PDF 效果最好；扫描件需要后续 OCR 版本。");
+        return;
+      }
+
       if (activeTool === "pdf-seal") {
         if (!sealFile) throw new Error("请先上传合同章图片，建议使用透明 PNG。");
         const pdf = await addSeamSealToPdf(files[0], sealFile, {
@@ -1649,7 +1814,7 @@ export default function Home() {
 
               <div className="grid grid-cols-3 gap-3 text-sm">
                 <div className="border-t border-[#cfc6b7] pt-3">
-                  <strong className="block text-2xl">9</strong>
+                  <strong className="block text-2xl">10</strong>
                   <span className="text-[#66706c]">可用工具</span>
                 </div>
                 <div className="border-t border-[#cfc6b7] pt-3">
@@ -1673,7 +1838,7 @@ export default function Home() {
                   <span className="shrink-0 rounded bg-[#f0b35a] px-3 py-1 text-xs font-black text-[#3a2404]">可用</span>
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
-                  {tools.filter((tool) => ["pdf-edit", "pdf-seal", "word-seal", "compress", "convert", "image-pdf"].includes(tool.id)).map((tool) => (
+                  {tools.filter((tool) => ["pdf-edit", "pdf-word", "pdf-seal", "word-seal", "compress", "convert"].includes(tool.id)).map((tool) => (
                     <button
                       className="rounded border border-[#d8d1c3] bg-[#fbfaf6] p-4 text-left transition hover:border-[#1f6f67] hover:bg-white"
                       key={tool.id}
@@ -1781,7 +1946,7 @@ export default function Home() {
 
             <div className="grid grid-cols-3 gap-3 text-sm">
               <div className="border-t border-[#cfc6b7] pt-3">
-                <strong className="block text-2xl">9</strong>
+                <strong className="block text-2xl">10</strong>
                 <span className="text-[#66706c]">可用工具</span>
               </div>
               <div className="border-t border-[#cfc6b7] pt-3">
@@ -2401,6 +2566,12 @@ export default function Home() {
             {activeTool === "pdf-compress" && (
               <p className="mt-4 rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12]">
                 当前是浏览器端轻量优化，适合清理结构冗余。扫描件图片重采样压缩需要接入服务端引擎后再做。
+              </p>
+            )}
+
+            {activeTool === "pdf-word" && (
+              <p className="mt-4 rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12]">
+                第一版会提取 PDF 里的可选中文字并生成 Word。扫描件、图片型 PDF 暂时不会自动 OCR，后面可接服务端 OCR 增强版。
               </p>
             )}
 
