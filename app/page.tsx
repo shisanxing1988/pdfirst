@@ -3,8 +3,8 @@
 import { ChangeEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { decodePDFRawStream, PDFDocument, PDFName, PDFRawStream, StandardFonts, degrees, rgb } from "pdf-lib";
 
-type ToolId = "compress" | "convert" | "image-pdf" | "pdf-merge" | "pdf-split" | "pdf-compress" | "pdf-edit" | "pdf-seal";
-type ToolKind = "image" | "pdf";
+type ToolId = "compress" | "convert" | "image-pdf" | "pdf-merge" | "pdf-split" | "pdf-compress" | "pdf-edit" | "pdf-seal" | "word-seal";
+type ToolKind = "image" | "pdf" | "word";
 type EditorTool = "select" | "edit-text" | "add-text" | "highlight";
 type SealSide = "right" | "left" | "top" | "bottom";
 
@@ -116,6 +116,13 @@ const tools: Array<{
     title: "PDF 骑缝章",
     tag: "合同盖章",
     description: "上传合同章图片，自动按页数切分并贴到 PDF 边缘。",
+  },
+  {
+    id: "word-seal",
+    kind: "word",
+    title: "Word 转 PDF 骑缝章",
+    tag: "DOCX 合同",
+    description: "上传 Word 文档和合同章，先生成 PDF，再自动加骑缝章。",
   },
 ];
 
@@ -392,7 +399,7 @@ async function canvasToPngBytes(canvas: HTMLCanvasElement) {
 }
 
 async function addSeamSealToPdf(
-  file: File,
+  file: Blob,
   sealFile: File,
   options: { side: SealSide; size: number; offset: number; position: number; opacity: number; rotation: number },
 ) {
@@ -451,6 +458,167 @@ async function addSeamSealToPdf(
   }
 
   sealImage.close();
+  const bytes = await pdf.save({ useObjectStreams: true });
+  return new Blob([bytes], { type: "application/pdf" });
+}
+
+async function inflateZipData(data: Uint8Array, compression: number) {
+  if (compression === 0) return data;
+  if (compression !== 8) throw new Error("暂不支持这个 Word 文件的压缩格式。");
+  if (!("DecompressionStream" in window)) throw new Error("当前浏览器不支持直接读取 Word，请先把 Word 另存为 PDF 后盖章。");
+
+  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw" as CompressionFormat));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function readDocxEntry(file: File, targetPath: string) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let eocdOffset = -1;
+
+  for (let offset = bytes.length - 22; offset >= Math.max(0, bytes.length - 66000); offset -= 1) {
+    if (view.getUint32(offset, true) === 0x06054b50) {
+      eocdOffset = offset;
+      break;
+    }
+  }
+
+  if (eocdOffset < 0) throw new Error("无法读取这个 Word 文件，请确认是 .docx 格式。");
+  const entryCount = view.getUint16(eocdOffset + 10, true);
+  const centralDirectoryOffset = view.getUint32(eocdOffset + 16, true);
+  let offset = centralDirectoryOffset;
+
+  for (let index = 0; index < entryCount; index += 1) {
+    if (view.getUint32(offset, true) !== 0x02014b50) break;
+    const compression = view.getUint16(offset + 10, true);
+    const compressedSize = view.getUint32(offset + 20, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const localHeaderOffset = view.getUint32(offset + 42, true);
+    const name = new TextDecoder().decode(bytes.slice(offset + 46, offset + 46 + nameLength));
+
+    if (name === targetPath) {
+      const localNameLength = view.getUint16(localHeaderOffset + 26, true);
+      const localExtraLength = view.getUint16(localHeaderOffset + 28, true);
+      const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
+      return inflateZipData(bytes.slice(dataOffset, dataOffset + compressedSize), compression);
+    }
+
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+
+  throw new Error("这个 Word 文件里没有找到正文内容。");
+}
+
+function extractDocxParagraphs(xml: string) {
+  const documentXml = new DOMParser().parseFromString(xml, "application/xml");
+  const paragraphs = Array.from(documentXml.getElementsByTagName("w:p"));
+
+  return paragraphs
+    .map((paragraph) => {
+      let text = "";
+      paragraph.querySelectorAll("w\\:t, t").forEach((node) => {
+        text += node.textContent ?? "";
+      });
+      paragraph.querySelectorAll("w\\:tab, tab").forEach(() => {
+        text += "  ";
+      });
+      return text.trim();
+    })
+    .filter(Boolean);
+}
+
+function wrapCanvasText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const lines: string[] = [];
+  let current = "";
+
+  for (const char of text) {
+    const next = current + char;
+    if (context.measureText(next).width > maxWidth && current) {
+      lines.push(current);
+      current = char;
+    } else {
+      current = next;
+    }
+  }
+
+  if (current) lines.push(current);
+  return lines;
+}
+
+async function docxToPdf(file: File) {
+  const documentXml = await readDocxEntry(file, "word/document.xml");
+  const paragraphs = extractDocxParagraphs(new TextDecoder().decode(documentXml));
+  if (paragraphs.length === 0) throw new Error("没有读取到 Word 正文内容。");
+
+  const pdf = await PDFDocument.create();
+  const pageWidth = 595.28;
+  const pageHeight = 841.89;
+  const canvasWidth = 1240;
+  const canvasHeight = 1754;
+  const marginX = 110;
+  const marginTop = 120;
+  const marginBottom = 100;
+  const lineHeight = 44;
+  const titleSize = 36;
+  const bodySize = 28;
+  let canvas = document.createElement("canvas");
+  let context = canvas.getContext("2d");
+  const pageImages: Uint8Array[] = [];
+  let y = marginTop;
+
+  function startPage() {
+    canvas = document.createElement("canvas");
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    context = canvas.getContext("2d");
+    if (!context) throw new Error("浏览器不支持 Word 转 PDF 画布。");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvasWidth, canvasHeight);
+    context.fillStyle = "#111827";
+    context.textBaseline = "top";
+    context.font = `${bodySize}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
+    y = marginTop;
+  }
+
+  async function finishPage() {
+    if (!context) return;
+    const jpg = await blobFromCanvas(canvas, "image/jpeg", 0.92);
+    pageImages.push(await readBytes(jpg));
+  }
+
+  startPage();
+
+  for (let index = 0; index < paragraphs.length; index += 1) {
+    if (!context) throw new Error("浏览器不支持 Word 转 PDF 画布。");
+    const isTitle = index === 0 && paragraphs[index].length <= 40;
+    context.font = `${isTitle ? titleSize : bodySize}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
+    const lines = wrapCanvasText(context, paragraphs[index], canvasWidth - marginX * 2);
+    const blockHeight = lines.length * lineHeight + 18;
+
+    if (y + blockHeight > canvasHeight - marginBottom) {
+      await finishPage();
+      startPage();
+      if (!context) throw new Error("浏览器不支持 Word 转 PDF 画布。");
+      context.font = `${bodySize}px Arial, "PingFang SC", "Microsoft YaHei", sans-serif`;
+    }
+
+    for (const line of lines) {
+      context.fillText(line, marginX, y);
+      y += lineHeight;
+    }
+    y += 18;
+  }
+
+  await finishPage();
+
+  for (const imageBytes of pageImages) {
+    const image = await pdf.embedJpg(imageBytes);
+    const page = pdf.addPage([pageWidth, pageHeight]);
+    page.drawImage(image, { x: 0, y: 0, width: pageWidth, height: pageHeight });
+  }
+
   const bytes = await pdf.save({ useObjectStreams: true });
   return new Blob([bytes], { type: "application/pdf" });
 }
@@ -848,6 +1016,7 @@ export default function Home() {
 
   const selectedTool = useMemo(() => tools.find((tool) => tool.id === activeTool) ?? tools[0], [activeTool]);
   const isPdfTool = selectedTool.kind === "pdf";
+  const isWordTool = selectedTool.kind === "word";
   const selectedVisualText = visualTexts.find((note) => note.id === selectedTextId);
   const currentTextBoxes = pdfTextBoxes.filter((box) => box.pageNumber === currentPage);
   const selectedPdfText = pdfTextBoxes.find((box) => box.id === selectedPdfTextId);
@@ -855,7 +1024,7 @@ export default function Home() {
   const styleFontFamily = selectedPdfText?.fontFamily ?? selectedVisualText?.fontFamily ?? editFontFamily;
   const styleClarity = selectedPdfText?.clarity ?? selectedVisualText?.clarity ?? editClarity;
   const ready = files.length > 0;
-  const accept = isPdfTool ? "application/pdf,.pdf" : "image/*";
+  const accept = isWordTool ? ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" : isPdfTool ? "application/pdf,.pdf" : "image/*";
 
   useEffect(() => {
     let cancelled = false;
@@ -1099,7 +1268,7 @@ export default function Home() {
     setHighlights([]);
     setDraftHighlight(null);
     setEditorTool("edit-text");
-    if (activeTool !== "pdf-seal") setSealFile(null);
+    if (activeTool !== "pdf-seal" && activeTool !== "word-seal") setSealFile(null);
     setSelectedTextId("");
     setPlacingText(false);
     setPdfTextBoxes([]);
@@ -1119,6 +1288,8 @@ export default function Home() {
           ? "PDF 已打开。点击预览区域添加文字，或切换到原文替换模式。"
           : activeTool === "pdf-seal"
             ? "PDF 已选择。请继续上传合同章图片并调整骑缝章参数。"
+            : activeTool === "word-seal"
+              ? "Word 已选择。请继续上传合同章图片，系统会先转成 PDF 再盖骑缝章。"
           : `已选择 ${picked.length} 个文件，请点击下方按钮开始处理。`
         : "文件只在你的浏览器里处理。",
     );
@@ -1343,6 +1514,23 @@ export default function Home() {
         return;
       }
 
+      if (activeTool === "word-seal") {
+        if (!sealFile) throw new Error("请先上传合同章图片，建议使用透明 PNG。");
+        const convertedPdf = await docxToPdf(files[0]);
+        const pdf = await addSeamSealToPdf(convertedPdf, sealFile, {
+          side: sealSide,
+          size: sealSize,
+          offset: sealOffset,
+          position: sealPosition,
+          opacity: sealOpacity,
+          rotation: sealRotation,
+        });
+        const outputUrl = URL.createObjectURL(pdf);
+        setOutputs([{ name: `${fileBaseName(files[0].name)}-word-seam-seal.pdf`, size: pdf.size, url: outputUrl, blob: pdf }]);
+        setMessage("Word 已转成 PDF 并加上骑缝章。可先预览效果，再手动保存。");
+        return;
+      }
+
       if (activeTool === "pdf-edit") {
         if (editMode === "visual") {
           const editedTextBoxes = pdfTextBoxes.filter(isPdfTextEdited);
@@ -1450,7 +1638,7 @@ export default function Home() {
 
             <div className="grid grid-cols-3 gap-3 text-sm">
               <div className="border-t border-[#cfc6b7] pt-3">
-                <strong className="block text-2xl">8</strong>
+                <strong className="block text-2xl">9</strong>
                 <span className="text-[#66706c]">可用工具</span>
               </div>
               <div className="border-t border-[#cfc6b7] pt-3">
@@ -1481,11 +1669,11 @@ export default function Home() {
                       files.length > 0 ? "border-[#1f6f67] bg-[#eef7f4]" : "border-[#b9afa0] bg-[#fbfaf6]"
                     }`}
                   >
-                    <input className="sr-only" multiple={activeTool !== "pdf-compress" && activeTool !== "pdf-edit"} type="file" accept={accept} onChange={handleFiles} />
+                    <input className="sr-only" multiple={activeTool !== "pdf-compress" && activeTool !== "pdf-edit" && activeTool !== "pdf-seal" && activeTool !== "word-seal"} type="file" accept={accept} onChange={handleFiles} />
                     <span>
-                      <strong className="block text-xl">{files.length > 0 ? `已选择 ${files.length} 个文件` : isPdfTool ? "选择 PDF 文件" : "选择图片文件"}</strong>
+                      <strong className="block text-xl">{files.length > 0 ? `已选择 ${files.length} 个文件` : isWordTool ? "选择 Word 文件" : isPdfTool ? "选择 PDF 文件" : "选择图片文件"}</strong>
                       <span className="mt-2 block text-sm text-[#66706c]">
-                        {files.length > 0 ? "可以继续点这里重新选择" : isPdfTool ? "支持 PDF 文件，当前仍在浏览器本地处理" : "支持批量选择，当前不上云处理"}
+                        {files.length > 0 ? "可以继续点这里重新选择" : isWordTool ? "支持 .docx 文件，先转成 PDF 再盖骑缝章" : isPdfTool ? "支持 PDF 文件，当前仍在浏览器本地处理" : "支持批量选择，当前不上云处理"}
                       </span>
                     </span>
                   </label>
@@ -2066,7 +2254,7 @@ export default function Home() {
               </p>
             )}
 
-            {activeTool === "pdf-seal" && (
+            {(activeTool === "pdf-seal" || activeTool === "word-seal") && (
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <input ref={sealInputRef} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/*" aria-label="上传合同章图片" onChange={handleSealFile} />
                 <button
@@ -2109,7 +2297,7 @@ export default function Home() {
                   <input className="mt-2 w-full accent-[#1f6f67]" type="range" min="-30" max="30" value={sealRotation} onChange={(event) => setSealRotation(Number(event.target.value))} />
                 </label>
                 <p className="rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12] md:col-span-2">
-                  真实骑缝章会把一张章图按页数切开，每页贴一段到边缘；打印后叠放页面，边缘可以拼出完整章。
+                  {activeTool === "word-seal" ? "这版会读取 Word 正文并生成文本流式 PDF，再把章图按页数切开贴到边缘；复杂页眉页脚、表格和图片不会完全还原 Word 原版式。" : "真实骑缝章会把一张章图按页数切开，每页贴一段到边缘；打印后叠放页面，边缘可以拼出完整章。"}
                 </p>
               </div>
             )}
@@ -2117,10 +2305,10 @@ export default function Home() {
             {activeTool !== "pdf-edit" && (
               <button
                 className="mt-4 w-full rounded bg-[#1f6f67] px-5 py-3 font-black text-white transition hover:bg-[#15534d] disabled:cursor-not-allowed disabled:bg-[#a5aaa6]"
-                disabled={!ready || busy || (activeTool === "pdf-seal" && !sealFile)}
+                disabled={!ready || busy || ((activeTool === "pdf-seal" || activeTool === "word-seal") && !sealFile)}
                 onClick={processFiles}
               >
-                {busy ? "处理中..." : activeTool === "pdf-seal" ? (sealFile ? "生成骑缝章 PDF" : "先上传合同章图片") : files.length > 0 ? "处理已选择文件" : isPdfTool ? "先选择 PDF 文件" : "先选择图片文件"}
+                {busy ? "处理中..." : activeTool === "pdf-seal" || activeTool === "word-seal" ? (sealFile ? (activeTool === "word-seal" ? "转 PDF 并生成骑缝章" : "生成骑缝章 PDF") : "先上传合同章图片") : files.length > 0 ? "处理已选择文件" : isWordTool ? "先选择 Word 文件" : isPdfTool ? "先选择 PDF 文件" : "先选择图片文件"}
               </button>
             )}
 
