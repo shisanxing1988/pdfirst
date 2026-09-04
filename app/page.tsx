@@ -1787,51 +1787,34 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-[#f7f4ee] text-[#18201f]">
         <section className="border-b border-[#d8d1c3] bg-[#fbfaf6]">
-          <div className="mx-auto flex max-w-7xl flex-col gap-5 px-5 py-6 lg:px-8">
-            <div className="flex flex-col gap-5">
-              <header className="flex items-center justify-between gap-4">
-                <div className="flex items-center gap-3">
-                  <div className="grid h-10 w-10 place-items-center rounded bg-[#1f6f67] text-lg font-black text-white">P</div>
-                  <div>
-                    <p className="text-sm text-[#66706c]">PDF + Image Toolkit</p>
-                    <h1 className="text-2xl font-black tracking-normal">轻文档工具箱</h1>
-                  </div>
+          <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-5 py-4 lg:px-8">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded bg-[#1f6f67] text-lg font-black text-white">P</div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <h1 className="text-2xl font-black tracking-normal">轻文档工具箱</h1>
+                  <span className="rounded bg-[#e7f0ce] px-2 py-1 text-xs font-bold text-[#3d5621]">PDF / 图片 / Word</span>
                 </div>
-                <a className="rounded border border-[#18201f] px-4 py-2 text-sm font-bold" href="#tools">
-                  工具列表
-                </a>
-              </header>
-
-              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-                <div>
-                  <p className="mb-2 inline-flex rounded bg-[#e7f0ce] px-3 py-1 text-sm font-bold text-[#3d5621]">PDF 核心功能已接入浏览器处理</p>
-                  <h2 className="text-3xl font-black leading-tight tracking-normal md:text-5xl">
-                  在线 PDF 编辑保存
-                  </h2>
-                </div>
-                <p className="max-w-xl text-sm leading-6 text-[#4f5a55] md:text-right">
-                  10 个工具，首页只做选择；上传、编辑、预览和保存都在独立工作窗口里完成。
-                </p>
+                <p className="truncate text-sm text-[#66706c]">在线 PDF 编辑保存，每个工具都在独立工作窗口操作。</p>
               </div>
             </div>
+            <a className="shrink-0 rounded border border-[#18201f] px-4 py-2 text-sm font-bold" href="#tools">
+              工具列表
+            </a>
           </div>
         </section>
 
-        <section className="mx-auto max-w-7xl px-5 py-6 lg:px-8" id="tools">
-          <div className="mb-5 flex flex-col justify-between gap-3 md:flex-row md:items-end">
+        <section className="mx-auto max-w-7xl px-5 py-5 lg:px-8" id="tools">
+          <div className="mb-4 flex flex-col justify-between gap-3 md:flex-row md:items-end">
             <div>
               <p className="text-sm font-bold text-[#1f6f67]">Tools</p>
               <h2 className="text-3xl font-black">工具列表</h2>
             </div>
-            <p className="max-w-xl text-sm leading-6 text-[#66706c]">
-              每个工具都会进入独立工作窗口。首页不处理文件，避免小区域里操作拥挤。
-            </p>
-          </div>
-
-          <div className="mb-4 flex gap-2">
-            <span className="rounded bg-[#1f6f67] px-3 py-1 text-sm font-black text-white">图片</span>
-            <span className="rounded bg-[#18201f] px-3 py-1 text-sm font-black text-white">PDF</span>
-            <span className="rounded bg-[#f0b35a] px-3 py-1 text-sm font-black text-[#3a2404]">Word</span>
+            <div className="flex gap-2">
+              <span className="rounded bg-[#1f6f67] px-3 py-1 text-sm font-black text-white">图片</span>
+              <span className="rounded bg-[#18201f] px-3 py-1 text-sm font-black text-white">PDF</span>
+              <span className="rounded bg-[#f0b35a] px-3 py-1 text-sm font-black text-[#3a2404]">Word</span>
+            </div>
           </div>
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -1843,11 +1826,11 @@ export default function Home() {
                 type="button"
               >
                 <div className="mb-5 flex items-center justify-between">
-                  <span className="rounded bg-white px-2 py-1 text-xs font-black text-[#1f6f67]">{toolKindLabel(tool.kind)}</span>
+                  <span className="text-xs font-black uppercase text-[#1f6f67]">{tool.kind}</span>
                   <span className="rounded bg-[#e7f0ce] px-2 py-1 text-xs font-bold text-[#3d5621]">{tool.tag}</span>
                 </div>
-                <h3 className="text-xl font-black">{tool.title}</h3>
-                <p className="mt-3 text-sm leading-6 text-[#66706c]">{tool.description}</p>
+                <h3 className="mb-3 text-xl font-black">{tool.title}</h3>
+                <p className="text-sm leading-6 text-[#66706c]">{tool.description}</p>
               </button>
             ))}
           </div>
