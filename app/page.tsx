@@ -1787,8 +1787,8 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-[#f7f4ee] text-[#18201f]">
         <section className="border-b border-[#d8d1c3] bg-[#fbfaf6]">
-          <div className="mx-auto flex max-w-7xl flex-col gap-10 px-5 py-8 lg:px-8">
-            <div className="flex flex-col gap-8">
+          <div className="mx-auto flex max-w-7xl flex-col gap-5 px-5 py-6 lg:px-8">
+            <div className="flex flex-col gap-5">
               <header className="flex items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
                   <div className="grid h-10 w-10 place-items-center rounded bg-[#1f6f67] text-lg font-black text-white">P</div>
@@ -1802,35 +1802,22 @@ export default function Home() {
                 </a>
               </header>
 
-              <div className="max-w-4xl">
-                <p className="mb-4 inline-flex rounded bg-[#e7f0ce] px-3 py-1 text-sm font-bold text-[#3d5621]">PDF 核心功能已接入浏览器处理</p>
-                <h2 className="text-4xl font-black leading-tight tracking-normal md:text-6xl">
+              <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <p className="mb-2 inline-flex rounded bg-[#e7f0ce] px-3 py-1 text-sm font-bold text-[#3d5621]">PDF 核心功能已接入浏览器处理</p>
+                  <h2 className="text-3xl font-black leading-tight tracking-normal md:text-5xl">
                   在线 PDF 编辑保存
-                </h2>
-                <p className="mt-5 max-w-2xl text-lg leading-8 text-[#4f5a55]">
-                  首页只做工具选择；上传、编辑、预览和保存都在独立工作窗口里完成。
+                  </h2>
+                </div>
+                <p className="max-w-xl text-sm leading-6 text-[#4f5a55] md:text-right">
+                  10 个工具，首页只做选择；上传、编辑、预览和保存都在独立工作窗口里完成。
                 </p>
-              </div>
-
-              <div className="grid max-w-2xl grid-cols-3 gap-3 text-sm">
-                <div className="border-t border-[#cfc6b7] pt-3">
-                  <strong className="block text-2xl">10</strong>
-                  <span className="text-[#66706c]">可用工具</span>
-                </div>
-                <div className="border-t border-[#cfc6b7] pt-3">
-                  <strong className="block text-2xl">0</strong>
-                  <span className="text-[#66706c]">服务器留存</span>
-                </div>
-                <div className="border-t border-[#cfc6b7] pt-3">
-                  <strong className="block text-2xl">独立</strong>
-                  <span className="text-[#66706c]">工作窗口</span>
-                </div>
               </div>
             </div>
           </div>
         </section>
 
-        <section className="mx-auto max-w-7xl px-5 py-8 lg:px-8" id="tools">
+        <section className="mx-auto max-w-7xl px-5 py-6 lg:px-8" id="tools">
           <div className="mb-5 flex flex-col justify-between gap-3 md:flex-row md:items-end">
             <div>
               <p className="text-sm font-bold text-[#1f6f67]">Tools</p>
