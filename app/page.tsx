@@ -126,8 +126,6 @@ const tools: Array<{
   },
 ];
 
-const imageTools = tools.filter((tool) => tool.kind === "image");
-const pdfTools = tools.filter((tool) => tool.kind === "pdf");
 const editedPdfTextScale = 0.88;
 const fontOptions = [
   { value: "system", label: "默认黑体", stack: 'Arial, "PingFang SC", "Microsoft YaHei", sans-serif' },
@@ -968,6 +966,7 @@ async function replaceOriginalPdfText(file: File, search: string, replacement: s
 
 export default function Home() {
   const [activeTool, setActiveTool] = useState<ToolId>("compress");
+  const [workspaceMode, setWorkspaceMode] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [quality, setQuality] = useState(76);
   const [maxSide, setMaxSide] = useState(1600);
@@ -1025,6 +1024,17 @@ export default function Home() {
   const styleClarity = selectedPdfText?.clarity ?? selectedVisualText?.clarity ?? editClarity;
   const ready = files.length > 0;
   const accept = isWordTool ? ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" : isPdfTool ? "application/pdf,.pdf" : "image/*";
+  const isEditorWorkspace = workspaceMode || activeTool === "pdf-edit";
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const toolId = params.get("tool") as ToolId | null;
+    if (toolId && tools.some((tool) => tool.id === toolId)) {
+      setActiveTool(toolId);
+      setWorkspaceMode(true);
+      setMessage("选择文件后，再点击处理按钮生成文件。");
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1297,6 +1307,7 @@ export default function Home() {
 
   function selectTool(toolId: ToolId) {
     setActiveTool(toolId);
+    setWorkspaceMode(true);
     setFiles([]);
     setSealFile(null);
     clearOutputs();
@@ -1313,6 +1324,26 @@ export default function Home() {
     setCurrentPage(1);
     setZoom(1.35);
     setMessage("选择文件后，再点击处理按钮生成下载文件。");
+  }
+
+  function toolKindLabel(kind: ToolKind) {
+    if (kind === "pdf") return "PDF";
+    if (kind === "word") return "DOC";
+    return "IMG";
+  }
+
+  function openToolWorkspace(toolId: ToolId) {
+    const url = `${window.location.origin}${window.location.pathname}?tool=${toolId}`;
+    const width = window.screen.availWidth || 1440;
+    const height = window.screen.availHeight || 900;
+    const opened = window.open(url, "_blank", `popup=yes,width=${width},height=${height},left=0,top=0,resizable=yes,scrollbars=yes`);
+    if (opened) {
+      opened.moveTo?.(0, 0);
+      opened.resizeTo?.(width, height);
+      opened.focus();
+      return;
+    }
+    window.location.href = url;
   }
 
   function handleSealFile(event: ChangeEvent<HTMLInputElement>) {
@@ -1587,11 +1618,123 @@ export default function Home() {
     }
   }
 
+  if (!workspaceMode) {
+    return (
+      <main className="min-h-screen bg-[#f7f4ee] text-[#18201f]">
+        <section className="border-b border-[#d8d1c3] bg-[#fbfaf6]">
+          <div className="mx-auto grid min-h-[78vh] max-w-7xl gap-10 px-5 py-8 lg:grid-cols-[0.9fr_1.1fr] lg:px-8">
+            <div className="flex flex-col justify-between gap-8">
+              <header className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-10 w-10 place-items-center rounded bg-[#1f6f67] text-lg font-black text-white">P</div>
+                  <div>
+                    <p className="text-sm text-[#66706c]">PDF + Image Toolkit</p>
+                    <h1 className="text-2xl font-black tracking-normal">轻文档工具箱</h1>
+                  </div>
+                </div>
+                <a className="rounded border border-[#18201f] px-4 py-2 text-sm font-bold" href="#tools">
+                  工具列表
+                </a>
+              </header>
+
+              <div className="max-w-2xl">
+                <p className="mb-4 inline-flex rounded bg-[#e7f0ce] px-3 py-1 text-sm font-bold text-[#3d5621]">PDF 核心功能已接入浏览器处理</p>
+                <h2 className="text-5xl font-black leading-tight tracking-normal md:text-6xl">
+                  在线打开 PDF，编辑后保存。
+                </h2>
+                <p className="mt-5 max-w-xl text-lg leading-8 text-[#4f5a55]">
+                  首页负责展示和选择工具；具体上传、编辑、预览和保存都会在独立工作窗口里完成，给 PDF 编辑留出更大的操作空间。
+                </p>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3 text-sm">
+                <div className="border-t border-[#cfc6b7] pt-3">
+                  <strong className="block text-2xl">9</strong>
+                  <span className="text-[#66706c]">可用工具</span>
+                </div>
+                <div className="border-t border-[#cfc6b7] pt-3">
+                  <strong className="block text-2xl">0</strong>
+                  <span className="text-[#66706c]">服务器留存</span>
+                </div>
+                <div className="border-t border-[#cfc6b7] pt-3">
+                  <strong className="block text-2xl">独立</strong>
+                  <span className="text-[#66706c]">工作窗口</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid content-center gap-4">
+              <div className="rounded border border-[#cfc6b7] bg-white p-5 shadow-sm">
+                <div className="mb-4 flex items-center justify-between gap-4 border-b border-[#ebe5da] pb-3">
+                  <div>
+                    <h3 className="font-black">工具展示台</h3>
+                    <p className="text-sm text-[#66706c]">选择一个工具，会打开新的大窗口进行操作。</p>
+                  </div>
+                  <span className="shrink-0 rounded bg-[#f0b35a] px-3 py-1 text-xs font-black text-[#3a2404]">可用</span>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {tools.filter((tool) => ["pdf-edit", "pdf-seal", "word-seal", "compress", "convert", "image-pdf"].includes(tool.id)).map((tool) => (
+                    <button
+                      className="rounded border border-[#d8d1c3] bg-[#fbfaf6] p-4 text-left transition hover:border-[#1f6f67] hover:bg-white"
+                      key={tool.id}
+                      onClick={() => openToolWorkspace(tool.id)}
+                      type="button"
+                    >
+                      <span className="text-xs font-black text-[#1f6f67]">{toolKindLabel(tool.kind)}</span>
+                      <strong className="mt-2 block text-lg">{tool.title}</strong>
+                      <span className="mt-2 block text-sm leading-6 text-[#66706c]">{tool.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="mx-auto max-w-7xl px-5 py-8 lg:px-8" id="tools">
+          <div className="mb-5 flex flex-col justify-between gap-3 md:flex-row md:items-end">
+            <div>
+              <p className="text-sm font-bold text-[#1f6f67]">Tools</p>
+              <h2 className="text-3xl font-black">工具列表</h2>
+            </div>
+            <p className="max-w-xl text-sm leading-6 text-[#66706c]">
+              每个工具都会进入独立工作窗口。首页不处理文件，避免小区域里操作拥挤。
+            </p>
+          </div>
+
+          <div className="mb-4 flex gap-2">
+            <span className="rounded bg-[#1f6f67] px-3 py-1 text-sm font-black text-white">图片</span>
+            <span className="rounded bg-[#18201f] px-3 py-1 text-sm font-black text-white">PDF</span>
+            <span className="rounded bg-[#f0b35a] px-3 py-1 text-sm font-black text-[#3a2404]">Word</span>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {tools.map((tool) => (
+              <button
+                className="min-h-40 rounded border border-[#d8d1c3] bg-[#fbfaf6] p-4 text-left transition hover:border-[#1f6f67] hover:bg-white hover:shadow-sm"
+                key={tool.id}
+                onClick={() => openToolWorkspace(tool.id)}
+                type="button"
+              >
+                <div className="mb-5 flex items-center justify-between">
+                  <span className="rounded bg-white px-2 py-1 text-xs font-black text-[#1f6f67]">{toolKindLabel(tool.kind)}</span>
+                  <span className="rounded bg-[#e7f0ce] px-2 py-1 text-xs font-bold text-[#3d5621]">{tool.tag}</span>
+                </div>
+                <h3 className="text-xl font-black">{tool.title}</h3>
+                <p className="mt-3 text-sm leading-6 text-[#66706c]">{tool.description}</p>
+              </button>
+            ))}
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-[#f7f4ee] text-[#18201f]">
-      <section className={`border-b border-[#d8d1c3] ${activeTool === "pdf-edit" ? "bg-[#eef2f7]" : "bg-[#fbfaf6]"}`}>
-        <div className={activeTool === "pdf-edit" ? "mx-auto grid min-h-screen max-w-none gap-0 px-0 py-0 lg:grid-cols-[104px_minmax(0,1fr)]" : "mx-auto grid max-w-7xl gap-8 px-5 py-8 lg:grid-cols-[0.9fr_1.1fr] lg:px-8"}>
-          {activeTool === "pdf-edit" && (
+      <section className={`border-b border-[#d8d1c3] ${isEditorWorkspace ? "bg-[#eef2f7]" : "bg-[#fbfaf6]"}`}>
+        <div className={isEditorWorkspace ? "mx-auto grid min-h-screen max-w-none gap-0 px-0 py-0 lg:grid-cols-[104px_minmax(0,1fr)]" : "mx-auto grid max-w-7xl gap-8 px-5 py-8 lg:grid-cols-[0.9fr_1.1fr] lg:px-8"}>
+          {isEditorWorkspace && (
             <aside className="hidden border-r border-[#163461] bg-[#08245a] px-3 py-4 text-white lg:block">
               <div className="mb-5 grid h-16 place-items-center rounded bg-white/10 text-lg font-black">轻</div>
               <div className="grid gap-2">
@@ -1604,7 +1747,7 @@ export default function Home() {
                     onClick={() => selectTool(tool.id)}
                     type="button"
                   >
-                    <span className="text-xl">{tool.kind === "pdf" ? "PDF" : "IMG"}</span>
+                    <span className="text-xl">{toolKindLabel(tool.kind)}</span>
                     <span>{tool.title.replace("PDF ", "").replace("图片", "")}</span>
                   </button>
                 ))}
@@ -1612,7 +1755,7 @@ export default function Home() {
             </aside>
           )}
 
-          <div className={activeTool === "pdf-edit" ? "hidden" : "flex flex-col justify-between gap-8"}>
+          <div className={isEditorWorkspace ? "hidden" : "flex flex-col justify-between gap-8"}>
             <header className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
                 <div className="grid h-10 w-10 place-items-center rounded bg-[#1f6f67] text-lg font-black text-white">P</div>
@@ -1652,16 +1795,23 @@ export default function Home() {
             </div>
           </div>
 
-          <div className={activeTool === "pdf-edit" ? "min-w-0 bg-white p-0" : "rounded border border-[#cfc6b7] bg-white p-4 shadow-sm"}>
-            <div className={activeTool === "pdf-edit" ? "flex min-h-16 items-center justify-between gap-4 border-b border-[#d7dde8] bg-white px-4 py-3" : "mb-4 flex items-center justify-between gap-4 border-b border-[#ebe5da] pb-3"}>
+          <div className={isEditorWorkspace ? "min-w-0 bg-white p-0" : "rounded border border-[#cfc6b7] bg-white p-4 shadow-sm"}>
+            <div className={isEditorWorkspace ? "flex min-h-16 items-center justify-between gap-4 border-b border-[#d7dde8] bg-white px-4 py-3" : "mb-4 flex items-center justify-between gap-4 border-b border-[#ebe5da] pb-3"}>
               <div>
-                <h3 className="font-black">在线处理台</h3>
+                <h3 className="font-black">{workspaceMode ? selectedTool.title : "在线处理台"}</h3>
                 <p className="text-sm text-[#66706c]">{selectedTool.description}</p>
               </div>
-              <span className="shrink-0 rounded bg-[#f0b35a] px-3 py-1 text-xs font-black text-[#3a2404]">可用</span>
+              <div className="flex shrink-0 items-center gap-2">
+                {workspaceMode && (
+                  <button className="rounded border border-[#cfc6b7] px-3 py-2 text-xs font-black text-[#18201f] hover:border-[#1f6f67]" onClick={() => window.close()} type="button">
+                    关闭窗口
+                  </button>
+                )}
+                <span className="rounded bg-[#f0b35a] px-3 py-1 text-xs font-black text-[#3a2404]">可用</span>
+              </div>
             </div>
 
-            <div className={activeTool === "pdf-edit" ? "grid gap-0 xl:grid-cols-[minmax(0,1fr)_340px]" : ""}>
+            <div className={isEditorWorkspace ? "grid min-h-[calc(100vh-65px)] gap-0 xl:grid-cols-[minmax(0,1fr)_340px]" : ""}>
               <div className="min-w-0">
                 {activeTool !== "pdf-edit" && (
                   <label
@@ -2073,7 +2223,7 @@ export default function Home() {
                 )}
               </div>
 
-              <div className={activeTool === "pdf-edit" ? "border-l border-[#d7dde8] bg-[#fbfaf6] p-4" : ""}>
+              <div className={isEditorWorkspace ? "border-l border-[#d7dde8] bg-[#fbfaf6] p-4" : ""}>
             {!isPdfTool && (
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 <label className="text-sm font-bold">
@@ -2358,40 +2508,6 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-7xl px-5 py-8 lg:px-8" id="tools">
-        <div className="mb-5 flex flex-col justify-between gap-3 md:flex-row md:items-end">
-          <div>
-            <p className="text-sm font-bold text-[#1f6f67]">Tools</p>
-            <h2 className="text-3xl font-black">工具列表</h2>
-          </div>
-          <p className="max-w-xl text-sm leading-6 text-[#66706c]">
-            目前优先做浏览器端可完成的高频功能。更强的扫描件压缩、OCR、可视化拖拽编辑会进入服务端增强版。
-          </p>
-        </div>
-
-        <div className="mb-4 flex gap-2">
-          <span className="rounded bg-[#1f6f67] px-3 py-1 text-sm font-black text-white">图片</span>
-          <span className="rounded bg-[#18201f] px-3 py-1 text-sm font-black text-white">PDF</span>
-        </div>
-
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          {[...imageTools, ...pdfTools].map((tool) => (
-            <button
-              className={`min-h-40 rounded border p-4 text-left transition ${
-                activeTool === tool.id ? "border-[#1f6f67] bg-white shadow-sm" : "border-[#d8d1c3] bg-[#fbfaf6] hover:border-[#1f6f67]"
-              }`}
-              key={tool.id}
-              onClick={() => selectTool(tool.id)}
-            >
-              <span className={`mb-4 inline-flex rounded px-2 py-1 text-xs font-black ${tool.kind === "pdf" ? "bg-[#e4ecff] text-[#203b75]" : "bg-[#e7f0ce] text-[#3d5621]"}`}>
-                {tool.tag}
-              </span>
-              <strong className="block text-xl">{tool.title}</strong>
-              <span className="mt-2 block text-sm leading-6 text-[#66706c]">{tool.description}</span>
-            </button>
-          ))}
-        </div>
-      </section>
     </main>
   );
 }
