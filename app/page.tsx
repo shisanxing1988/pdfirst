@@ -121,15 +121,15 @@ const tools: Array<{
     id: "pdf-seal",
     kind: "pdf",
     title: "PDF 骑缝章",
-    tag: "合同盖章",
-    description: "上传合同章图片，自动按页数切分并贴到 PDF 边缘。",
+    tag: "合同批量盖章",
+    description: "一次选择多份合同，统一按页数切分合同章并贴到 PDF 边缘。",
   },
   {
     id: "word-seal",
     kind: "word",
     title: "Word 转 PDF 骑缝章",
-    tag: "DOCX 合同",
-    description: "上传 Word 文档和合同章，先生成 PDF，再自动加骑缝章。",
+    tag: "DOCX 批量盖章",
+    description: "一次选择多份 Word 合同，转成 PDF 后统一加骑缝章。",
   },
 ];
 
@@ -1454,9 +1454,9 @@ export default function Home() {
         ? activeTool === "pdf-edit"
           ? "PDF 已打开。点击预览区域添加文字，或切换到原文替换模式。"
           : activeTool === "pdf-seal"
-            ? "PDF 已选择。请继续上传合同章图片并调整骑缝章参数。"
+            ? `已选择 ${picked.length} 份 PDF 合同。请继续上传合同章图片并调整骑缝章参数。`
             : activeTool === "word-seal"
-              ? "Word 已选择。请继续上传合同章图片，系统会先转成 PDF 再盖骑缝章。"
+              ? `已选择 ${picked.length} 份 Word 合同。请继续上传合同章图片，系统会逐份转成 PDF 再盖骑缝章。`
           : `已选择 ${picked.length} 个文件，请点击下方按钮开始处理。`
         : "文件只在你的浏览器里处理。",
     );
@@ -1696,34 +1696,56 @@ export default function Home() {
 
       if (activeTool === "pdf-seal") {
         if (!sealFile) throw new Error("请先上传合同章图片，建议使用透明 PNG。");
-        const pdf = await addSeamSealToPdf(files[0], sealFile, {
-          side: sealSide,
-          size: sealSize,
-          offset: sealOffset,
-          position: sealPosition,
-          opacity: sealOpacity,
-          rotation: sealRotation,
-        });
-        const outputUrl = URL.createObjectURL(pdf);
-        setOutputs([{ name: `${fileBaseName(files[0].name)}-seam-seal.pdf`, size: pdf.size, url: outputUrl, blob: pdf }]);
-        setMessage("骑缝章 PDF 已生成。可先预览效果，再手动保存。");
+        const sealedOutputs: OutputFile[] = [];
+        let failedCount = 0;
+        for (let index = 0; index < files.length; index += 1) {
+          const file = files[index];
+          setMessage(`正在为第 ${index + 1} / ${files.length} 份 PDF 合同盖骑缝章...`);
+          try {
+            const pdf = await addSeamSealToPdf(file, sealFile, {
+              side: sealSide,
+              size: sealSize,
+              offset: sealOffset,
+              position: sealPosition,
+              opacity: sealOpacity,
+              rotation: sealRotation,
+            });
+            sealedOutputs.push({ name: `${fileBaseName(file.name)}-seam-seal.pdf`, size: pdf.size, url: URL.createObjectURL(pdf), blob: pdf });
+          } catch {
+            failedCount += 1;
+          }
+        }
+        if (sealedOutputs.length === 0) throw new Error("没有合同完成盖章，请确认文件未加密、没有损坏，并重新选择后再试。");
+        setOutputs(sealedOutputs);
+        setMessage(`已为 ${sealedOutputs.length} 份 PDF 合同生成骑缝章${failedCount ? `，${failedCount} 份未能处理` : ""}。每份文件都可单独预览、重命名和保存。`);
         return;
       }
 
       if (activeTool === "word-seal") {
         if (!sealFile) throw new Error("请先上传合同章图片，建议使用透明 PNG。");
-        const convertedPdf = await docxToPdf(files[0]);
-        const pdf = await addSeamSealToPdf(convertedPdf, sealFile, {
-          side: sealSide,
-          size: sealSize,
-          offset: sealOffset,
-          position: sealPosition,
-          opacity: sealOpacity,
-          rotation: sealRotation,
-        });
-        const outputUrl = URL.createObjectURL(pdf);
-        setOutputs([{ name: `${fileBaseName(files[0].name)}-word-seam-seal.pdf`, size: pdf.size, url: outputUrl, blob: pdf }]);
-        setMessage("Word 已转成 PDF 并加上骑缝章。可先预览效果，再手动保存。");
+        const sealedOutputs: OutputFile[] = [];
+        let failedCount = 0;
+        for (let index = 0; index < files.length; index += 1) {
+          const file = files[index];
+          setMessage(`正在处理第 ${index + 1} / ${files.length} 份 Word 合同...`);
+          try {
+            const convertedPdf = await docxToPdf(file);
+            const pdf = await addSeamSealToPdf(convertedPdf, sealFile, {
+              side: sealSide,
+              size: sealSize,
+              offset: sealOffset,
+              position: sealPosition,
+              opacity: sealOpacity,
+              rotation: sealRotation,
+            });
+            sealedOutputs.push({ name: `${fileBaseName(file.name)}-word-seam-seal.pdf`, size: pdf.size, url: URL.createObjectURL(pdf), blob: pdf });
+          } catch {
+            failedCount += 1;
+          }
+        }
+        if (sealedOutputs.length === 0) throw new Error("没有合同完成盖章，请确认文件是可读取的 .docx 格式，并重新选择后再试。");
+        setOutputs(sealedOutputs);
+        setMessage(`已将 ${sealedOutputs.length} 份 Word 合同转成 PDF 并加上骑缝章${failedCount ? `，${failedCount} 份未能处理` : ""}。每份文件都可单独预览、重命名和保存。`);
         return;
       }
 
@@ -1928,11 +1950,11 @@ export default function Home() {
                       files.length > 0 ? "border-[#1f6f67] bg-[#eef7f4]" : "border-[#b9afa0] bg-[#fbfaf6]"
                     }`}
                   >
-                    <input className="sr-only" multiple={activeTool !== "pdf-compress" && activeTool !== "pdf-edit" && activeTool !== "pdf-seal" && activeTool !== "word-seal"} type="file" accept={accept} onChange={handleFiles} />
+                    <input className="sr-only" multiple={activeTool !== "pdf-compress" && activeTool !== "pdf-edit"} type="file" accept={accept} onChange={handleFiles} />
                     <span>
-                      <strong className="block text-xl">{files.length > 0 ? `已选择 ${files.length} 个文件` : isWordTool ? "选择 Word 文件" : isPdfTool ? "选择 PDF 文件" : "选择图片文件"}</strong>
+                      <strong className="block text-xl">{files.length > 0 ? `已选择 ${files.length} 个文件` : activeTool === "pdf-seal" ? "选择 PDF 合同" : activeTool === "word-seal" ? "选择 Word 合同" : isWordTool ? "选择 Word 文件" : isPdfTool ? "选择 PDF 文件" : "选择图片文件"}</strong>
                       <span className="mt-2 block text-sm text-[#66706c]">
-                        {files.length > 0 ? "可以继续点这里重新选择" : isWordTool ? "支持 .docx 文件，先转成 PDF 再盖骑缝章" : isPdfTool ? "支持 PDF 文件，当前仍在浏览器本地处理" : "支持批量选择，当前不上云处理"}
+                        {files.length > 0 ? "可以继续点这里重新选择" : activeTool === "pdf-seal" ? "支持一次选择多份 PDF 合同，统一盖同一枚骑缝章" : activeTool === "word-seal" ? "支持一次选择多份 .docx 合同，统一转 PDF 后盖同一枚骑缝章" : isWordTool ? "支持 .docx 文件，先转成 PDF 再盖骑缝章" : isPdfTool ? "支持 PDF 文件，当前仍在浏览器本地处理" : "支持批量选择，当前不上云处理"}
                       </span>
                     </span>
                   </label>
@@ -2562,7 +2584,7 @@ export default function Home() {
                   <input className="mt-2 w-full accent-[#1f6f67]" type="range" min="-30" max="30" value={sealRotation} onChange={(event) => setSealRotation(Number(event.target.value))} />
                 </label>
                 <p className="rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12] md:col-span-2">
-                  {activeTool === "word-seal" ? "这版会读取 Word 正文并生成文本流式 PDF，再把章图按页数切开贴到边缘；复杂页眉页脚、表格和图片不会完全还原 Word 原版式。" : "真实骑缝章会把一张章图按页数切开，每页贴一段到边缘；打印后叠放页面，边缘可以拼出完整章。"}
+                  {activeTool === "word-seal" ? "支持批量选择 Word 合同：每份文件会先生成 PDF，再按各自页数切分同一枚合同章。复杂页眉页脚、表格和图片不会完全还原 Word 原版式。" : "支持批量选择 PDF 合同：每份文件会按各自页数切分同一枚合同章；打印后分别叠放每一份合同的页面，边缘可以拼出完整章。"}
                 </p>
               </div>
             )}
@@ -2573,7 +2595,7 @@ export default function Home() {
                 disabled={!ready || busy || ((activeTool === "pdf-seal" || activeTool === "word-seal") && !sealFile)}
                 onClick={processFiles}
               >
-                {busy ? "处理中..." : activeTool === "pdf-seal" || activeTool === "word-seal" ? (sealFile ? (activeTool === "word-seal" ? "转 PDF 并生成骑缝章" : "生成骑缝章 PDF") : "先上传合同章图片") : files.length > 0 ? "处理已选择文件" : isWordTool ? "先选择 Word 文件" : isPdfTool ? "先选择 PDF 文件" : "先选择图片文件"}
+                {busy ? "批量处理中..." : activeTool === "pdf-seal" || activeTool === "word-seal" ? (sealFile ? (activeTool === "word-seal" ? `为 ${files.length || "已选"} 份合同转 PDF 并盖章` : `为 ${files.length || "已选"} 份合同生成骑缝章`) : "先上传合同章图片") : files.length > 0 ? "处理已选择文件" : isWordTool ? "先选择 Word 文件" : isPdfTool ? "先选择 PDF 文件" : "先选择图片文件"}
               </button>
             )}
 
