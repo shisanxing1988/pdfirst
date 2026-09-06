@@ -60,7 +60,24 @@ const tools: Array<{
   title: string;
   tag: string;
   description: string;
+  featured?: boolean;
 }> = [
+  {
+    id: "pdf-edit",
+    kind: "pdf",
+    title: "PDF 原文编辑",
+    tag: "主推功能 · 替换文字",
+    description: "直接打开 PDF，修改可识别原文，也支持添加批注文字后保存。",
+    featured: true,
+  },
+  {
+    id: "pdf-seal",
+    kind: "pdf",
+    title: "PDF 骑缝章",
+    tag: "主推功能 · 合同批量盖章",
+    description: "一次选择多份合同，按页切分章图并贴到 PDF 边缘。",
+    featured: true,
+  },
   {
     id: "compress",
     kind: "image",
@@ -104,25 +121,11 @@ const tools: Array<{
     description: "重新整理 PDF 对象结构。扫描件深度压缩下一阶段接服务端。",
   },
   {
-    id: "pdf-edit",
-    kind: "pdf",
-    title: "PDF 原文编辑",
-    tag: "替换文字",
-    description: "替换文本型 PDF 中可识别的原始文字，也支持添加批注文字。",
-  },
-  {
     id: "pdf-word",
     kind: "pdf",
     title: "PDF 转 Word",
-    tag: "提取文字",
-    description: "从文字型 PDF 提取内容，生成可编辑的 Word 文档。",
-  },
-  {
-    id: "pdf-seal",
-    kind: "pdf",
-    title: "PDF 骑缝章",
-    tag: "合同批量盖章",
-    description: "一次选择多份合同，统一按页数切分合同章并贴到 PDF 边缘。",
+    tag: "高保真保留版式",
+    description: "按页保留 PDF 的图片、字体、表格和原始视觉排版，生成 Word 文档。",
   },
   {
     id: "word-seal",
@@ -230,15 +233,6 @@ function latin1Bytes(value: string) {
   return bytes;
 }
 
-function xmlEscape(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}
-
 function crc32(bytes: Uint8Array) {
   let crc = -1;
   for (const byte of bytes) {
@@ -325,59 +319,82 @@ function createZip(entries: Array<{ name: string; content: string | Uint8Array }
   return new Blob([...chunks, ...central, endRecord], { type: "application/zip" });
 }
 
-function paragraphsToDocx(paragraphs: string[]) {
-  const body = paragraphs
-    .map((paragraph) =>
-      paragraph === ""
-        ? "<w:p/>"
-        : `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(paragraph)}</w:t></w:r></w:p>`,
+function buildDocxPicture(pageNumber: number, relationshipId: string, widthEmu: number, heightEmu: number) {
+  return `<w:p><w:pPr><w:keepNext/><w:keepLines/></w:pPr><w:r><w:rPr><w:noProof/></w:rPr><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><wp:extent cx="${widthEmu}" cy="${heightEmu}"/><wp:docPr id="${pageNumber}" name="PDF 第 ${pageNumber} 页"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="${pageNumber}" name="page-${pageNumber}.jpg"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="${relationshipId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${widthEmu}" cy="${heightEmu}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>`;
+}
+
+async function pdfPagesToDocx(pageImages: Array<{ bytes: Uint8Array; width: number; height: number }>) {
+  const emuPerInch = 914400;
+  const maxWidthEmu = Math.round(6.5 * emuPerInch);
+  const maxHeightEmu = Math.round(9 * emuPerInch);
+  const relationships = pageImages
+    .map(
+      (_, index) =>
+        `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/page-${index + 1}.jpg"/>`,
     )
     .join("");
-  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
 
-  return createZip([
+  const body = pageImages
+    .map((page, index) => {
+      const ratio = page.width / page.height;
+      let widthEmu = maxWidthEmu;
+      let heightEmu = Math.round(widthEmu / ratio);
+      if (heightEmu > maxHeightEmu) {
+        heightEmu = maxHeightEmu;
+        widthEmu = Math.round(heightEmu * ratio);
+      }
+      const picture = buildDocxPicture(index + 1, `rId${index + 1}`, widthEmu, heightEmu);
+      return `${index === 0 ? "" : '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'}${picture}`;
+    })
+    .join("");
+
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr></w:body></w:document>`;
+  const entries: Array<{ name: string; content: string | Uint8Array }> = [
     {
       name: "[Content_Types].xml",
-      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
     },
     {
       name: "_rels/.rels",
       content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
     },
+    {
+      name: "word/_rels/document.xml.rels",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationships}</Relationships>`,
+    },
     { name: "word/document.xml", content: documentXml },
-  ]);
+  ];
+
+  pageImages.forEach((page, index) => {
+    entries.push({ name: `word/media/page-${index + 1}.jpg`, content: page.bytes });
+  });
+  return createZip(entries);
 }
 
 async function pdfToWord(file: File) {
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.mjs";
   const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-  const paragraphs: string[] = [];
+  const pageImages: Array<{ bytes: Uint8Array; width: number; height: number }> = [];
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
-    const textContent = await page.getTextContent();
-    const lines = new Map<number, string[]>();
-
-    for (const item of textContent.items) {
-      if (!("str" in item) || !item.str.trim()) continue;
-      const transform = "transform" in item && Array.isArray(item.transform) ? item.transform : [0, 0, 0, 0, 0, 0];
-      const y = Math.round(Number(transform[5] ?? 0) / 6) * 6;
-      lines.set(y, [...(lines.get(y) ?? []), item.str]);
-    }
-
-    const pageLines = Array.from(lines.entries())
-      .sort((a, b) => b[0] - a[0])
-      .map(([, parts]) => parts.join("").replace(/\s+/g, " ").trim())
-      .filter(Boolean);
-
-    if (pageNumber > 1) paragraphs.push("");
-    paragraphs.push(`第 ${pageNumber} 页`);
-    paragraphs.push(...pageLines);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("浏览器不支持 PDF 页面渲染。");
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    await page.render({ canvas, canvasContext: context, viewport }).promise;
+    pageImages.push({
+      bytes: await readBytes(await blobFromCanvas(canvas, "image/jpeg", 0.94)),
+      width: viewport.width,
+      height: viewport.height,
+    });
   }
 
-  if (paragraphs.length === 0) throw new Error("没有提取到文字。这个 PDF 可能是扫描件，需要后续 OCR 版本处理。");
-  return paragraphsToDocx(paragraphs);
+  if (pageImages.length === 0) throw new Error("PDF 没有可转换的页面。");
+  return pdfPagesToDocx(pageImages);
 }
 
 async function imagesToPdf(files: File[]) {
@@ -800,70 +817,6 @@ async function editPdf(file: File, options: { text: string; pageMode: string; pa
   return new Blob([bytes], { type: "application/pdf" });
 }
 
-async function saveVisualPdfEdits(file: File, notes: VisualText[]) {
-  if (notes.length === 0) throw new Error("请先在 PDF 预览区域点击添加文字。");
-  const pdf = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const pages = pdf.getPages();
-
-  notes.forEach((note) => {
-    const targetPages = note.pageMode === "all" ? pages : [pages[Math.max(0, Math.min(pages.length - 1, note.pageNumber - 1))]];
-    targetPages.forEach((page) => {
-      const { width, height } = page.getSize();
-      page.drawText(note.text, {
-        x: Math.max(12, Math.min(width - 24, note.xRatio * width)),
-        y: Math.max(12, Math.min(height - 24, height - note.yRatio * height)),
-        size: note.fontSize,
-        font,
-        color: rgb(0.12, 0.44, 0.41),
-        opacity: 0.9,
-      });
-    });
-  });
-
-  const bytes = await pdf.save({ useObjectStreams: true });
-  return new Blob([bytes], { type: "application/pdf" });
-}
-
-async function saveSelectedTextEdits(file: File, boxes: PdfTextBox[]) {
-  const changed = boxes.filter(isPdfTextEdited);
-  if (changed.length === 0) throw new Error("请先点击 PDF 里的文字并修改内容。");
-
-  const pdf = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
-  const font = await pdf.embedFont(StandardFonts.Helvetica);
-  const pages = pdf.getPages();
-
-  changed.forEach((box) => {
-    const page = pages[box.pageNumber - 1];
-    if (!page) return;
-    const { width, height } = page.getSize();
-    const x = box.xRatio * width;
-    const top = box.yRatio * height;
-    const rectWidth = Math.max(16, box.widthRatio * width);
-    const rectHeight = Math.max(box.fontSize * 1.25, box.heightRatio * height);
-    const y = height - top - rectHeight;
-
-    page.drawRectangle({
-      x: Math.max(0, x - 1),
-      y: Math.max(0, y - 2),
-      width: Math.min(width - x, rectWidth + 8),
-      height: rectHeight + 4,
-      color: rgb(1, 1, 1),
-      opacity: 1,
-    });
-    page.drawText(box.text || " ", {
-      x,
-      y: Math.max(0, y + 2),
-      size: Math.max(8, Math.min(72, box.fontSize)),
-      font,
-      color: rgb(0.05, 0.08, 0.08),
-    });
-  });
-
-  const bytes = await pdf.save({ useObjectStreams: true });
-  return new Blob([bytes], { type: "application/pdf" });
-}
-
 async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: VisualText[], highlights: HighlightMark[]) {
   const changedBoxes = boxes.filter(isPdfTextEdited);
   if (changedBoxes.length === 0 && notes.length === 0 && highlights.length === 0) throw new Error("请先点击 PDF 里的文字并修改内容，或添加新文字/高亮。");
@@ -1122,8 +1075,29 @@ async function replaceOriginalPdfText(file: File, search: string, replacement: s
 }
 
 export default function Home() {
-  const [activeTool, setActiveTool] = useState<ToolId>("compress");
-  const [workspaceMode, setWorkspaceMode] = useState(false);
+  const getInitialTool = () => {
+    if (typeof window === "undefined") return "compress" as ToolId;
+    const params = new URLSearchParams(window.location.search);
+    const toolId = params.get("tool") as ToolId | null;
+    return toolId && tools.some((tool) => tool.id === toolId) ? toolId : "compress";
+  };
+
+  const getInitialWorkspace = () => {
+    if (typeof window === "undefined") return false;
+    const params = new URLSearchParams(window.location.search);
+    const toolId = params.get("tool");
+    return Boolean(toolId && tools.some((tool) => tool.id === toolId));
+  };
+
+  const getInitialMessage = () => {
+    if (typeof window === "undefined") return "文件只在你的浏览器里处理。";
+    const params = new URLSearchParams(window.location.search);
+    const toolId = params.get("tool");
+    return toolId && tools.some((tool) => tool.id === toolId) ? "选择文件后，再点击处理按钮生成文件。" : "文件只在你的浏览器里处理。";
+  };
+
+  const [activeTool, setActiveTool] = useState<ToolId>(getInitialTool);
+  const [workspaceMode, setWorkspaceMode] = useState(getInitialWorkspace);
   const [files, setFiles] = useState<File[]>([]);
   const [quality, setQuality] = useState(76);
   const [maxSide, setMaxSide] = useState(1600);
@@ -1162,13 +1136,21 @@ export default function Home() {
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [outputs, setOutputs] = useState<OutputFile[]>([]);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("文件只在你的浏览器里处理。");
+  const [message, setMessage] = useState(getInitialMessage);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const selectedPdfTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const sealInputRef = useRef<HTMLInputElement | null>(null);
   const dragTextRef = useRef<{ id: string; dx: number; dy: number; height: number; moved: boolean } | null>(null);
   const dragPdfTextRef = useRef<{ id: string; dx: number; dy: number; moved: boolean } | null>(null);
   const highlightDragRef = useRef<{ xRatio: number; yRatio: number } | null>(null);
   const suppressPdfTextClickRef = useRef(false);
+
+  useEffect(() => {
+    if (selectedPdfTextId && selectedPdfTextAreaRef.current) {
+      selectedPdfTextAreaRef.current.focus();
+      selectedPdfTextAreaRef.current.select();
+    }
+  }, [selectedPdfTextId]);
 
   const selectedTool = useMemo(() => tools.find((tool) => tool.id === activeTool) ?? tools[0], [activeTool]);
   const isPdfTool = selectedTool.kind === "pdf";
@@ -1182,16 +1164,6 @@ export default function Home() {
   const ready = files.length > 0;
   const accept = isWordTool ? ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" : isPdfTool ? "application/pdf,.pdf" : "image/*";
   const isEditorWorkspace = workspaceMode || activeTool === "pdf-edit";
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const toolId = params.get("tool") as ToolId | null;
-    if (toolId && tools.some((tool) => tool.id === toolId)) {
-      setActiveTool(toolId);
-      setWorkspaceMode(true);
-      setMessage("选择文件后，再点击处理按钮生成文件。");
-    }
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1222,10 +1194,12 @@ export default function Home() {
         if (!previewingOutput && !cancelled) {
           const textContent = await page.getTextContent();
           const nextBoxes = buildTextBoxes(pdfjsLib, textContent, viewport, pageNumber, pdfTextBoxes);
-          setPdfTextBoxes((current) => [
-            ...current.filter((box) => box.pageNumber !== pageNumber),
-            ...nextBoxes,
-          ]);
+          setPdfTextBoxes((current) => {
+            const filtered = current.filter((box) => box.pageNumber !== pageNumber);
+            const merged = [...filtered, ...nextBoxes];
+            const same = filtered.length === nextBoxes.length && merged.every((box, index) => box.id === nextBoxes[index]?.id && box.text === nextBoxes[index]?.text);
+            return same ? current : merged;
+          });
           setMessage(nextBoxes.length > 0 ? `第 ${pageNumber} 页识别到 ${nextBoxes.length} 个可编辑文字块。` : "这一页没有识别到可编辑文字块。");
         }
       } catch (error) {
@@ -1237,7 +1211,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [activeTool, currentPage, editMode, previewUrl, previewingOutput, zoom]);
+  }, [activeTool, currentPage, editMode, pdfTextBoxes, previewUrl, previewingOutput, zoom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1500,7 +1474,7 @@ export default function Home() {
       opened.focus();
       return;
     }
-    window.location.href = url;
+    window.location.assign(url);
   }
 
   function handleSealFile(event: ChangeEvent<HTMLInputElement>) {
@@ -1690,7 +1664,7 @@ export default function Home() {
         const docx = await pdfToWord(files[0]);
         const output = new Blob([docx], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
         setOutputs([{ name: `${fileBaseName(files[0].name)}.docx`, size: output.size, url: URL.createObjectURL(output), blob: output }]);
-        setMessage("Word 文档已生成。文字型 PDF 效果最好；扫描件需要后续 OCR 版本。");
+        setMessage("高保真 Word 文档已生成，已按页保留 PDF 的图片、字体、表格和原始版式。");
         return;
       }
 
@@ -1842,14 +1816,28 @@ export default function Home() {
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {tools.map((tool) => (
               <button
-                className="min-h-40 rounded border border-[#d8d1c3] bg-[#fbfaf6] p-4 text-left transition hover:border-[#1f6f67] hover:bg-white hover:shadow-sm"
+                className={`min-h-40 rounded border p-4 text-left transition hover:bg-white hover:shadow-sm ${
+                  tool.featured
+                    ? "border-[#1f6f67] bg-[#eef7f4] shadow-sm hover:border-[#15524c]"
+                    : "border-[#d8d1c3] bg-[#fbfaf6] hover:border-[#1f6f67]"
+                }`}
                 key={tool.id}
                 onClick={() => openToolWorkspace(tool.id)}
                 type="button"
               >
                 <div className="mb-5 flex items-center justify-between">
                   <span className="text-xs font-black uppercase text-[#1f6f67]">{tool.kind}</span>
-                  <span className="rounded bg-[#e7f0ce] px-2 py-1 text-xs font-bold text-[#3d5621]">{tool.tag}</span>
+                  {tool.featured ? (
+                    <span
+                      aria-label="推荐工具"
+                      className="grid h-8 w-8 place-items-center rounded-full bg-[#1f6f67] text-base"
+                      title="推荐工具"
+                    >
+                      👍
+                    </span>
+                  ) : (
+                    <span className="rounded bg-[#e7f0ce] px-2 py-1 text-xs font-bold text-[#3d5621]">{tool.tag}</span>
+                  )}
                 </div>
                 <h3 className="mb-3 text-xl font-black">{tool.title}</h3>
                 <p className="text-sm leading-6 text-[#66706c]">{tool.description}</p>
@@ -1946,11 +1934,12 @@ export default function Home() {
               <div className="min-w-0">
                 {activeTool !== "pdf-edit" && (
                   <label
+                    aria-label={activeTool === "pdf-seal" ? "选择 PDF 合同文件" : activeTool === "word-seal" ? "选择 Word 合同文件" : isWordTool ? "选择 Word 文件" : isPdfTool ? "选择 PDF 文件" : "选择图片文件"}
                     className={`grid min-h-44 cursor-pointer place-items-center rounded border-2 border-dashed p-6 text-center transition hover:border-[#1f6f67] ${
                       files.length > 0 ? "border-[#1f6f67] bg-[#eef7f4]" : "border-[#b9afa0] bg-[#fbfaf6]"
                     }`}
                   >
-                    <input className="sr-only" multiple={activeTool !== "pdf-compress" && activeTool !== "pdf-edit"} type="file" accept={accept} onChange={handleFiles} />
+                    <input aria-label={activeTool === "pdf-seal" ? "选择 PDF 合同文件" : activeTool === "word-seal" ? "选择 Word 合同文件" : isWordTool ? "选择 Word 文件" : isPdfTool ? "选择 PDF 文件" : "选择图片文件"} className="sr-only" multiple={activeTool !== "pdf-compress" && activeTool !== "pdf-edit"} type="file" accept={accept} onChange={handleFiles} />
                     <span>
                       <strong className="block text-xl">{files.length > 0 ? `已选择 ${files.length} 个文件` : activeTool === "pdf-seal" ? "选择 PDF 合同" : activeTool === "word-seal" ? "选择 Word 合同" : isWordTool ? "选择 Word 文件" : isPdfTool ? "选择 PDF 文件" : "选择图片文件"}</strong>
                       <span className="mt-2 block text-sm text-[#66706c]">
@@ -2088,6 +2077,7 @@ export default function Home() {
                                     onClick={() => setCurrentPage(index + 1)}
                                     type="button"
                                   >
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img alt={`第 ${index + 1} 页`} className="mx-auto w-full" src={url} />
                                     <span className="mt-2 block text-xs font-black text-[#4f5a55]">{index + 1}</span>
                                   </button>
@@ -2099,6 +2089,7 @@ export default function Home() {
                           </div>
                           <div className="relative overflow-auto bg-[#252a29] p-4">
                             <div
+                            aria-label="PDF 编辑画布"
                             className={`relative mx-auto bg-white shadow-lg ${editorTool === "highlight" || placingText ? "cursor-crosshair" : ""}`}
                             onClick={(event: MouseEvent<HTMLDivElement>) => {
                               if (editMode === "visual" && editorTool === "add-text" && placingText) addVisualText(event);
@@ -2107,12 +2098,18 @@ export default function Home() {
                                 setSelectedTextId("");
                               }
                             }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                              }
+                            }}
                             onPointerDown={startHighlight}
                             onPointerMove={moveHighlight}
                             onPointerUp={finishHighlight}
+                            role="button"
                             style={{ width: canvasSize.width || 620, height: canvasSize.height || 820 }}
-                          >
-                            <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+                            tabIndex={0}
+                          >                            <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
                             {!previewingOutput &&
                               [...highlights.filter((mark) => mark.pageNumber === currentPage), ...(draftHighlight?.pageNumber === currentPage ? [draftHighlight] : [])].map((mark) => (
                                 <div
@@ -2183,6 +2180,15 @@ export default function Home() {
                                       setSelectedPdfTextId(box.id);
                                       setSelectedTextId("");
                                     }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === "Enter" || event.key === " ") {
+                                        event.preventDefault();
+                                        if (editorTool !== "highlight") {
+                                          setSelectedPdfTextId(box.id);
+                                          setSelectedTextId("");
+                                        }
+                                      }
+                                    }}
                                     onPointerDown={(event) => {
                                       if (editorTool === "highlight") return;
                                       if (editorTool !== "select" && editorTool !== "edit-text") return;
@@ -2232,11 +2238,13 @@ export default function Home() {
                                       fontSize: `${Math.max(8, effectivePdfFontSize(box) * 1.35)}px`,
                                       textShadow: changed ? textShadow("dark", box.clarity) : undefined,
                                     }}
+                                    role="button"
+                                    tabIndex={0}
                                     title={box.originalText}
                                   >
                                     {selected ? (
                                       <textarea
-                                        autoFocus
+                                        ref={selectedPdfTextAreaRef}
                                         className="h-full w-full resize-none overflow-hidden whitespace-pre border-0 bg-transparent px-1 py-0 leading-tight text-[#111827] outline-none"
                                         onClick={(event) => event.stopPropagation()}
                                         onChange={(event) => updateSelectedPdfText(event.target.value)}
@@ -2341,8 +2349,8 @@ export default function Home() {
                       </div>
                     ) : (
                       <div className="grid h-[calc(100vh-80px)] min-h-[720px] place-items-center bg-[#252a29] px-6 text-center text-white">
-                        <label className="grid min-h-72 w-full max-w-xl cursor-pointer place-items-center rounded border-2 border-dashed border-white/35 bg-white/5 p-8 transition hover:border-[#f0b35a] hover:bg-white/10">
-                          <input className="sr-only" type="file" accept={accept} onChange={handleFiles} />
+                        <label aria-label="打开 PDF 文件" className="grid min-h-72 w-full max-w-xl cursor-pointer place-items-center rounded border-2 border-dashed border-white/35 bg-white/5 p-8 transition hover:border-[#f0b35a] hover:bg-white/10">
+                          <input aria-label="打开 PDF 文件" className="sr-only" type="file" accept={accept} onChange={handleFiles} />
                           <span>
                             <strong className="block text-3xl">打开 PDF</strong>
                             <span className="mt-3 block text-sm text-[#d7dedb]">选择文件后直接进入大画布编辑</span>
@@ -2537,7 +2545,7 @@ export default function Home() {
 
             {activeTool === "pdf-word" && (
               <p className="mt-4 rounded bg-[#fff4dc] px-3 py-2 text-sm leading-6 text-[#6c4a12]">
-                第一版会提取 PDF 里的可选中文字并生成 Word。扫描件、图片型 PDF 暂时不会自动 OCR，后面可接服务端 OCR 增强版。
+                当前采用高保真模式：每页按原样渲染后嵌入 Word，因此图片、字体、表格、印章和复杂排版不会丢失。输出以视觉保真为主，页面内文字暂不可单独编辑。
               </p>
             )}
 
