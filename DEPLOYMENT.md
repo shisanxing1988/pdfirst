@@ -83,6 +83,17 @@ npm run check             # 先确认本地能过
 
 # 历史发布日志
 
+## 2026-11-05：中文字体子集与静态资源缓存
+
+- 发布版本：`54b9e59d-6167-484a-88f1-455071f00a72`。
+- 编辑器预览字体从 10.1MB 全量 Noto Sans SC 换成 8618 字子集：`NotoSansSC-8105-v1.woff2`（1.14MB，`@font-face`）与 `NotoSansSC-8105-v1.ttf`（2.55MB，pdf-lib 导出嵌入）。覆盖通用规范汉字表 8105 字（含三级表的人名地名用字）+ ASCII/Latin-1/标点/全角。
+- 全量字体保留为 `NotoSansSC-Regular-full.ttf`，仅在待保存文字超出子集时下载；仍缺字才提示更换字符。
+- 新增 `public/_headers`：`/fonts/*` 与 `/pdfium-2.15.1.wasm` 一年 immutable，`/pdf.worker.mjs` 1 小时，站点图标 7 天；`_next/static` 的 immutable 规则由本文件接管（vinext 只在文件不存在时才生成）。
+- 回归测试 40 项（新增 5 项字体覆盖/回退/一致性检查）、lint 0 error、构建通过。
+- 部署后 `verify:cloudflare` 通过：13 页、45 个资源（含新 woff2），线上 `Cache-Control` 已实测生效。
+- 未做真实浏览器交互复测；woff2 仅经 fontTools 结构校验（8618 cmap、抽字有轮廓）。若浏览器端渲染异常，回滚到 `9ce14100-b25a-4236-abc3-9697fe56773c` 即恢复全量字体。
+- 发布时 GitHub Actions 任务在队列中滞留 8 分钟以上未开始，CI 结果晚于部署到达。
+
 ## 2026-11-04：建立版本控制基线（无功能变更）
 
 - 线上版本：`9ce14100-b25a-4236-abc3-9697fe56773c`（2026-11-04T11:15:59Z）。
