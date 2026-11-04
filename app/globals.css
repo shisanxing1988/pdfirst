@@ -71,9 +71,14 @@ a, button, summary, input, select { -webkit-tap-highlight-color: transparent; }
 .site-brand { display: flex; align-items: center; gap: 10px; }
 .site-brand .brand-name { font-size: 18px; letter-spacing: normal; color: #18201f; }
 .site-brand .brand-icon { width: 32px; height: 32px; flex: none; background: url("/favicon.svg?v=2") center / contain no-repeat; }
+/* 8618-character subset (通用规范汉字表 + ASCII/punctuation). Must match the font
+   embedded on export in app/pdf-edit-export.ts, otherwise the width the user
+   sees in the editor differs from the saved PDF. WOFF2 is 1.1 MB vs 2.5 MB TTF;
+   the TTF is listed as a fallback for engines without WOFF2 support. */
 @font-face {
   font-family: "PdfEditorCJK";
-  src: url("/fonts/NotoSansSC-Regular.ttf") format("truetype");
+  src: url("/fonts/NotoSansSC-8105-v1.woff2") format("woff2"),
+       url("/fonts/NotoSansSC-8105-v1.ttf") format("truetype");
   font-display: block;
 }
 

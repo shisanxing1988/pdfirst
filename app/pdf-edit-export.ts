@@ -37,30 +37,53 @@ export function wrapPdfText(text: string, width: number, font: PDFFont, size: nu
   return lines;
 }
 
-// A new text object with a Unicode map is written for every line. Reopening with
-// PDF.js recovers the actual text, rather than an image or private editor metadata.
-export async function writeEditablePdf(data: ArrayBuffer, texts: ExportText[], highlights: ExportHighlight[], loadCjkFont = async () => {
-  const response = await fetch('/fonts/NotoSansSC-Regular.ttf');
+// The editor ships a 8618-character subset of Noto Sans SC (通用规范汉字表 plus
+// ASCII, punctuation and fullwidth forms) — 2.5 MB instead of 10.1 MB. Anything
+// outside it (ancient characters, rare CJK extensions) falls back to the full
+// font, which is only downloaded when a document actually needs it.
+export const CJK_SUBSET_FONT = '/fonts/NotoSansSC-8105-v1.ttf';
+export const CJK_FULL_FONT = '/fonts/NotoSansSC-Regular-full.ttf';
+
+async function fetchFont(url: string) {
+  const response = await fetch(url);
   if (!response.ok) throw new Error('中文字体加载失败，请重试。');
   return new Uint8Array(await response.arrayBuffer());
-}) {
+}
+
+// A new text object with a Unicode map is written for every line. Reopening with
+// PDF.js recovers the actual text, rather than an image or private editor metadata.
+export async function writeEditablePdf(data: ArrayBuffer, texts: ExportText[], highlights: ExportHighlight[], loadCjkFont = () => fetchFont(CJK_SUBSET_FONT), loadFullCjkFont = () => fetchFont(CJK_FULL_FONT)) {
   const pdf = await PDFDocument.load(data);
   pdf.registerFontkit(fontkit);
   const fonts = new Map<string, PDFFont>();
+  // Character coverage of each loaded CJK font, so a save can decide between the
+  // subset and the full font before writing anything.
+  const coverage = new Map<string, Set<number>>();
+  async function cjkFont(key: string, load: () => Promise<Uint8Array>) {
+    let font = fonts.get(key);
+    if (!font) {
+      font = await pdf.embedFont(await load(), { subset: true });
+      fonts.set(key, font);
+      coverage.set(key, new Set(font.getCharacterSet()));
+    }
+    return font;
+  }
+  async function cjkFontFor(text: string) {
+    const needed = Array.from(text).filter(char => !' \r\n\t'.includes(char)).map(char => char.codePointAt(0)!);
+    for (const [key, load] of [['cjk-subset', loadCjkFont], ['cjk-full', loadFullCjkFont]] as const) {
+      const font = await cjkFont(key, load);
+      if (needed.every(codepoint => coverage.get(key)!.has(codepoint))) return font;
+    }
+    // Reject missing glyphs instead of silently writing squares or an image.
+    throw new Error('新增文字包含当前字体不支持的字符，请更换字符后保存。');
+  }
   async function fontFor(text: ExportText) {
     const bold = (text.fontWeight ?? 400) >= 600;
     const standard = text.fontFamily === 'courier' ? (bold ? StandardFonts.CourierBold : StandardFonts.Courier) : ['times','georgia','serif','song','kai','fangsong'].includes(text.fontFamily ?? '') ? (bold ? StandardFonts.TimesRomanBold : StandardFonts.TimesRoman) : (bold ? StandardFonts.HelveticaBold : StandardFonts.Helvetica);
     let font = fonts.get(standard);
     if (!font) { font = await pdf.embedFont(standard); fonts.set(standard,font); }
     try { font.encodeText(text.text.replace(/[\r\n]/g,'')); return font; }
-    catch {
-      let cjk = fonts.get('cjk');
-      if (!cjk) { cjk = await pdf.embedFont(await loadCjkFont(), { subset: true }); fonts.set('cjk',cjk); }
-      // Reject missing glyphs instead of silently writing squares or an image.
-      const supported = new Set(cjk.getCharacterSet());
-      if (Array.from(text.text).some(char => !'\r\n'.includes(char) && !supported.has(char.codePointAt(0)!))) throw new Error('新增文字包含当前字体不支持的字符，请更换字符后保存。');
-      return cjk;
-    }
+    catch { return cjkFontFor(text.text); }
   }
   for (let i=0; i<pdf.getPageCount(); i++) {
     const page = pdf.getPage(i), box = page.getCropBox();

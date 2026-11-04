@@ -7,7 +7,7 @@ import {createCanvas} from '@napi-rs/canvas';
 import {removeTextObjects} from '../app/pdf-redaction.ts';
 import {writeEditablePdf} from '../app/pdf-edit-export.ts';
 const wasm=readFileSync('public/pdfium-2.15.1.wasm');
-const loadFont=async()=>new Uint8Array(readFileSync('public/fonts/NotoSansSC-Regular.ttf'));
+const loadFont=async()=>new Uint8Array(readFileSync('public/fonts/NotoSansSC-8105-v1.ttf'));
 const buffer=bytes=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength);
 const open=async data=>{const task=pdfjs.getDocument({data:new Uint8Array(data),standardFontDataUrl:process.cwd()+'/node_modules/pdfjs-dist/standard_fonts/'});return {task,pdf:await task.promise};};
 
