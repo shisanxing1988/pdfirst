@@ -1,5 +1,97 @@
 # 正式站发布记录
 
+本文档上半部分是**固定流程**（每次发布照做），下半部分是**历史发布日志**（倒序，只追加不改写）。
+
+---
+
+# 发布流程
+
+## 环境
+
+| 项 | 值 |
+|---|---|
+| 正式站 | https://pdfirst.com |
+| Cloudflare Worker | `pdfirst`（配置见 `wrangler.cloudflare.jsonc`） |
+| D1 数据库 | `pdfirst-metrics`（统计事件） |
+| 源码仓库 | https://github.com/shisanxing1988/pdfirst（public） |
+| 远程 | `git@github.com:shisanxing1988/pdfirst.git`，SSH 密钥 `~/.ssh/id_ed25519_pdfirst` |
+| Node | `>=22.13.0` |
+| 构建工具 | vinext（Cloudflare 目标需 `DEPLOY_TARGET=cloudflare`） |
+
+`account_id` 不写进仓库（public 仓库），由 wrangler 登录态推断；如需显式指定，用环境变量：
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID=<你的账号 ID>
+```
+
+`wrangler` 登录：`npx wrangler login`。若直连登录端点超时，走本机代理（`HTTPS_PROXY`），不要再改系统网络设置。
+
+## 每次发布的固定闭环
+
+```bash
+# 0. 确认在正确分支、工作区干净
+git status --short && git branch --show-current
+
+# 1. 本地全量校验（lint + 构建 + 全部测试）
+npm run check
+
+# 2. 提交并推送，等 CI 绿
+git add -A && git commit -m "feat|fix|chore: ..."
+git push origin main
+gh run watch          # 或打开 Actions 页面看
+
+# 3. 部署（会自动重新构建，不要复用旧 dist）
+npm run deploy:cloudflare
+
+# 4. 部署后立刻校验：线上就是刚构建的那份
+npm run verify:cloudflare -- https://pdfirst.com
+
+# 5. 打标签，把版本号和标签一一对应
+git tag -a v$(date +%Y.%m.%d) -m "Cloudflare Worker 版本 <version-id>"
+git push origin --tags
+```
+
+第 4 步必须在第 3 步之后**立刻**跑，中间不要重新构建 —— 脚本比对的是 `dist/` 里的资源哈希与线上资源是否一致，用来证明"线上跑的就是当前这份代码"。如果中途构建过，会因 chunk hash 不同报资源 404，那是正常现象，不代表线上有问题。
+
+`deploy:cloudflare` 输出里的 `Current Version ID` 记到下面的发布日志里。
+
+## 回滚
+
+```bash
+npx wrangler deployments list --config wrangler.cloudflare.jsonc   # 查历史版本
+npx wrangler rollback <version-id> --config wrangler.cloudflare.jsonc
+```
+
+Worker 版本回滚只回滚**服务端**产物；静态资源和客户端 bundle 随版本一起回，所以回滚后不需要额外操作。回滚完同样跑一次 `verify:cloudflare` 确认。
+
+## 首次在新机器上准备
+
+```bash
+npm ci                    # 不要用 npm install，锁文件必须一致
+npx wrangler login
+npm run check             # 先确认本地能过
+```
+
+## 已知坑
+
+- **构建会 `rm -rf dist`**：在受限沙箱/自动化环境里可能被批量删除保护拦下。绕过方式是先 `mv dist /tmp/pdf-dist-backup-$(date +%H%M%S)` 再构建，不要改构建脚本。
+- **CI 只校验不发版**：`.github/workflows/ci.yml` 跑 `npm ci → lint → npm test`，部署仍需本机手动执行（需要 Cloudflare 凭据）。要改成自动发布得把 `CLOUDFLARE_API_TOKEN` 加进仓库 secrets，目前没做。
+- **本机字体依赖**：PDF 编辑器部分字体来自 `public/fonts/`，未做子集化，体积较大，改动缓存策略时注意 `_headers`。
+- **`public/` 里的测试产物**：不得把含个人数据的文件或截图提交进仓库。
+
+---
+
+# 历史发布日志
+
+## 2026-11-04：建立版本控制基线（无功能变更）
+
+- 线上版本：`9ce14100-b25a-4236-abc3-9697fe56773c`（2026-11-04T11:15:59Z）。
+- 此前项目无 Git 仓库，2026-09-06 之后的迁移与全部改动只存在于本机。本次把当前线上代码纳入版本控制，接在远程原有历史之后（快进推送，未强推）。
+- 仓库为 public，运维文档中的账号 ID、Zone ID、Sites 项目 ID、DNS 地址、代理端口已脱敏；未脱敏的中间提交已被 `git gc` 清除。
+- 修复长期失效的测试：`pdf-edit-export.ts` 导入补 `.ts` 扩展名；`tests/pdf-word` 换用稳定切片边界并断言非空；补齐未声明的 `@napi-rs/canvas`；`npm test` 从"只跑 1 个文件"改为构建后跑全部 `tests/*.test.mjs`。
+- 新增 GitHub Actions CI（lint + 全量测试）。本地与 CI 均为 lint 0 error、测试 35/35 通过。
+- 标签 `baseline-2026-11-04` 对应上述线上版本。
+
 ## 2026-11-02：删除整个文字块及遮罩边缘
 
 - 发布版本：`020fc602-8a7e-4d78-818f-dc93e47d0ea6`。

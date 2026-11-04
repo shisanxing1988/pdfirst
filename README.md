@@ -85,8 +85,15 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 
 - `npm run dev`: start local development
 - `npm run build`: verify the vinext build output
-- `npm test`: build the project and verify the rendered homepage
+- `npm run lint`: ESLint
+- `npm test`: build, then run all `tests/*.test.mjs`
+- `npm run test:unit`: run tests without rebuilding
+- `npm run check`: lint + test（提交前跑这个）
+- `npm run deploy:cloudflare`: build for Cloudflare and deploy the Worker
+- `npm run verify:cloudflare -- https://pdfirst.com`: 部署后立即校验线上资源与本地 `dist` 逐字节一致
 
 ## 相关文档
 
+- [发布流程与历史日志](./DEPLOYMENT.md)
+- [Cloudflare 迁移记录](./CLOUDFLARE_MIGRATION.md)
 - [vinext Documentation](https://github.com/cloudflare/vinext)
