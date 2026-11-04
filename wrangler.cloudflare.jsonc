@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "pdfirst",
+  // 账号 ID 不写入仓库：deploy 时由 wrangler 登录态推断，或显式设置 CLOUDFLARE_ACCOUNT_ID。
+  "main": "./worker/cloudflare.ts",
+  "compatibility_date": "2026-09-07",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "preview.pdfirst.com", "custom_domain": true },
+    { "pattern": "pdfirst.com", "custom_domain": true }
+  ],
+  "assets": { "binding": "ASSETS" },
+  "d1_databases": [{ "binding": "METRICS", "database_name": "pdfirst-metrics", "database_id": "0a26ba5b-1183-4534-b097-ca6f8ed33975", "migrations_dir": "migrations" }],
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 }
+}
