@@ -1,7 +1,9 @@
-import { PDFDocument, StandardFonts, degrees, rgb, type PDFFont } from 'pdf-lib';
-import fontkit from '@pdf-lib/fontkit';
+// Type-only import: pdf-lib itself is loaded on demand (see writeEditablePdf),
+// so this module can be imported by the page bundle without pulling the engine.
+import type { PDFFont } from 'pdf-lib';
 // Explicit extension so the tests can import this module with Node's native
 // TypeScript stripping, which does not resolve extensionless specifiers.
+import { loadFontkit, loadPdfLib } from './pdf-lib-loader.ts';
 import { removeTextObjects, type TextRemoval } from './pdf-redaction.ts';
 
 export type ExportText = { pageNumber: number; text: string; xRatio: number; yRatio: number; widthRatio: number; fontSize: number; fontFamily?: string; fontWeight?: number; color?: string };
@@ -16,12 +18,6 @@ export async function removeInWorker(data: ArrayBuffer, regions: TextRemoval[]):
   const response = await fetch('/pdfium-2.15.1.wasm');
   if (!response.ok) throw new Error('PDF 编辑引擎加载失败，请刷新后重试。');
   return removeTextObjects(data, regions, await response.arrayBuffer());
-}
-
-function color(value = '#111827') {
-  if (/^#[0-9a-f]{6}$/i.test(value)) return rgb(parseInt(value.slice(1,3),16)/255, parseInt(value.slice(3,5),16)/255, parseInt(value.slice(5,7),16)/255);
-  const channels = value.match(/[\d.]+/g)?.map(Number);
-  return channels && channels.length >= 3 ? rgb(channels[0]/255, channels[1]/255, channels[2]/255) : rgb(0,0,0);
 }
 
 export function wrapPdfText(text: string, width: number, font: PDFFont, size: number) {
@@ -53,6 +49,13 @@ async function fetchFont(url: string) {
 // A new text object with a Unicode map is written for every line. Reopening with
 // PDF.js recovers the actual text, rather than an image or private editor metadata.
 export async function writeEditablePdf(data: ArrayBuffer, texts: ExportText[], highlights: ExportHighlight[], loadCjkFont = () => fetchFont(CJK_SUBSET_FONT), loadFullCjkFont = () => fetchFont(CJK_FULL_FONT)) {
+  const { PDFDocument, StandardFonts, degrees, rgb } = await loadPdfLib();
+  const fontkit = await loadFontkit();
+  const color = (value = '#111827') => {
+    if (/^#[0-9a-f]{6}$/i.test(value)) return rgb(parseInt(value.slice(1,3),16)/255, parseInt(value.slice(3,5),16)/255, parseInt(value.slice(5,7),16)/255);
+    const channels = value.match(/[\d.]+/g)?.map(Number);
+    return channels && channels.length >= 3 ? rgb(channels[0]/255, channels[1]/255, channels[2]/255) : rgb(0,0,0);
+  };
   const pdf = await PDFDocument.load(data);
   pdf.registerFontkit(fontkit);
   const fonts = new Map<string, PDFFont>();

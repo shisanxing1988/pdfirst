@@ -1,4 +1,6 @@
-import { PDFDocument } from "pdf-lib";
+// Explicit extension so the tests can import this module directly with Node's
+// native TypeScript stripping, which does not resolve extensionless specifiers.
+import { loadPdfLib } from "./pdf-lib-loader.ts";
 
 export type ImagePdfLayout = {
   landscape: boolean;
@@ -37,6 +39,7 @@ export function imagePlacement(layout: ImagePdfLayout, index: number, width: num
 
 export async function buildImagePdf(images: Array<{ bytes: Uint8Array; width: number; height: number; scale: number }>, layout: ImagePdfLayout) {
   if (!images.length) throw new Error("请先选择图片。");
+  const { PDFDocument } = await loadPdfLib();
   const pdf = await PDFDocument.create();
   const geometry = pageGeometry(layout);
   const pointsPerMm = 72 / 25.4;

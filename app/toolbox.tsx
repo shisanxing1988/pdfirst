@@ -5,7 +5,9 @@ import { track } from "./usage-tracking";
 import OutputPreview from "./output-preview";
 import ImagePdfEditor from "./image-pdf-editor";
 import { buildImagePdf, defaultImagePdfLayout, pageGeometry, type ImagePdfLayout } from "./image-pdf-layout";
-import { decodePDFRawStream, PDFDocument, PDFName, PDFRawStream, StandardFonts, degrees, rgb } from "pdf-lib";
+// pdf-lib is loaded on demand inside each handler (see app/pdf-lib-loader.ts) so
+// the landing page does not ship the PDF engine.
+import { loadPdfLib } from "./pdf-lib-loader";
 
 import { removeInWorker, writeEditablePdf, type ExportText } from "./pdf-edit-export";
 
@@ -517,6 +519,7 @@ async function imagesToPdf(files: File[], maxSide: number, quality: number, layo
 
 
 async function mergePdfs(files: File[]) {
+  const { PDFDocument } = await loadPdfLib();
   const merged = await PDFDocument.create();
   for (const file of files) {
     const source = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
@@ -528,6 +531,7 @@ async function mergePdfs(files: File[]) {
 }
 
 async function splitPdf(file: File[]) {
+  const { PDFDocument } = await loadPdfLib();
   const sourceFile = file[0];
   const source = await PDFDocument.load(await sourceFile.arrayBuffer(), { ignoreEncryption: true });
   const outputs: OutputFile[] = [];
@@ -550,6 +554,7 @@ async function splitPdf(file: File[]) {
 }
 
 async function optimizePdf(file: File) {
+  const { PDFDocument } = await loadPdfLib();
   const source = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
   const target = await PDFDocument.create();
   const pages = await target.copyPages(source, source.getPageIndices());
@@ -568,6 +573,7 @@ async function addSeamSealToPdf(
   sealFile: File,
   options: { side: SealSide; size: number; offset: number; position: number; opacity: number; rotation: number },
 ) {
+  const { PDFDocument, degrees } = await loadPdfLib();
   const pdf = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
   const pages = pdf.getPages();
   if (pages.length === 0) throw new Error("PDF 没有可盖章页面。");
@@ -722,6 +728,7 @@ async function docxToPdf(file: File) {
   const paragraphs = extractDocxParagraphs(new TextDecoder().decode(documentXml));
   if (paragraphs.length === 0) throw new Error("没有读取到 Word 正文内容。");
 
+  const { PDFDocument } = await loadPdfLib();
   const pdf = await PDFDocument.create();
   const pageWidth = 595.28;
   const pageHeight = 841.89;
@@ -794,6 +801,7 @@ async function docxToPdf(file: File) {
 }
 
 async function editPdf(file: File, options: { text: string; pageMode: string; pageNumber: number; fontSize: number }) {
+  const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
   const pdf = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const pages = pdf.getPages();
@@ -819,6 +827,7 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
   const changedBoxes = boxes.filter(isPdfTextEdited);
   if (!changedBoxes.length && !notes.some(note => note.text.trim()) && !highlights.length) throw new Error("请先修改文字，或添加新文字/高亮。");
   const input = await file.arrayBuffer();
+  const { PDFDocument } = await loadPdfLib();
   const pageCount = (await PDFDocument.load(input)).getPageCount();
   const regions = changedBoxes.map(box => ({
     pageNumber: box.pageNumber, xRatio: box.xRatio, yRatio: box.yRatio,
@@ -1008,6 +1017,7 @@ function replacePdfHexStrings(content: string, search: string, replacement: stri
 
 async function replaceOriginalPdfText(file: File, search: string, replacement: string) {
   if (!search.trim()) throw new Error("请输入要查找的原文字。");
+  const { PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } = await loadPdfLib();
   const pdf = await PDFDocument.load(await file.arrayBuffer(), { ignoreEncryption: true });
   let replacements = 0;
 
@@ -1627,6 +1637,7 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
   async function loadSealDemo() {
     setDemoLoading(true);
     try {
+      const { PDFDocument } = await loadPdfLib();
       const sampleFiles: File[] = [];
       for (const count of [3, 5]) {
         const pdf = await PDFDocument.create();

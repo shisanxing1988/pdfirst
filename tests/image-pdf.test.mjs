@@ -1,14 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import ts from 'typescript';
 import * as pdfLib from 'pdf-lib';
+import { buildImagePdf, defaultImagePdfLayout, imagePlacement, pageGeometry } from '../app/image-pdf-layout.ts';
 
-const source = readFileSync(new URL('../app/image-pdf-layout.ts', import.meta.url), 'utf8');
-const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-const exports = {};
-new Function("exports", "require", compiled)(exports, () => pdfLib);
-const { pageGeometry, imagePlacement, buildImagePdf, defaultImagePdfLayout } = exports;
 const jpeg = new Uint8Array(readFileSync(new URL('./fixtures/layout-test.jpg', import.meta.url)));
 
 test('five photos make two A4 pages with a four-photo layout', async () => {
