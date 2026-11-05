@@ -2252,9 +2252,32 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                             onClick={processFiles}
                             type="button"
                           >
-                            {busy ? "保存中..." : "保存 PDF"}
+                            {busy ? "保存中..." : outputs.length > 0 ? "重新保存" : "保存 PDF"}
                           </button>
                         </div>
+                        {activeTool === "pdf-edit" && outputs.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-2 rounded border border-[#1f6f67] bg-[#eef7f4] px-3 py-2">
+                            <span className="text-sm font-black text-[#15534d]">已生成，可以：</span>
+                            {outputs.map((output) => (
+                              <div className="ml-auto flex gap-2" key={output.url}>
+                                <button
+                                  className="rounded border border-[#1f6f67] bg-white px-4 py-2 text-sm font-black text-[#1f6f67] hover:bg-[#e2f1ec]"
+                                  onClick={() => previewOutputFile(output)}
+                                  type="button"
+                                >
+                                  预览
+                                </button>
+                                <button
+                                  className="rounded bg-[#1f6f67] px-4 py-2 text-sm font-black text-white hover:bg-[#15534d]"
+                                  onClick={() => saveOutputFile(output)}
+                                  type="button"
+                                >
+                                  下载
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         <div className="flex flex-wrap items-center justify-between gap-3 bg-[#18201f] px-3 py-2 text-sm text-white">
                           <button className="rounded border border-white/30 px-3 py-1 font-bold disabled:opacity-40" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} type="button">
                             上一页

@@ -65,7 +65,13 @@ export async function writeEditablePdf(data: ArrayBuffer, texts: ExportText[], h
   async function cjkFont(key: string, load: () => Promise<Uint8Array>) {
     let font = fonts.get(key);
     if (!font) {
-      font = await pdf.embedFont(await load(), { subset: true });
+      // subset: false on purpose. pdf-lib's runtime subsetting (fontkit TTFSubset)
+      // emits a font stream whose glyph table is missing most glyphs, and the font
+      // dictionary maps CIDs with /Identity, so edited text loses characters
+      // ("Deposit Summary" -> "De") while the advances stay correct. The shipped
+      // NotoSansSC-8105-v1.ttf is already a build-time pyftsubset subset, so we
+      // embed it as-is: +~1.7 MB per saved file, but the text is actually correct.
+      font = await pdf.embedFont(await load(), { subset: false });
       fonts.set(key, font);
       coverage.set(key, new Set(font.getCharacterSet()));
     }
