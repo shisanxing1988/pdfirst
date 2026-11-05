@@ -258,6 +258,42 @@ function pdfTextBackground(canvas: HTMLCanvasElement | null, mask: { x: number; 
   return [...colors].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "#ffffff";
 }
 
+// 采样原文字颜色：在 mask 内找出与背景差异最大的高频颜色。深底白字（银行
+// 流水标题等）必须靠它保留白字——contrastTextColor 只会反推深色字。
+function pdfTextInkColor(canvas: HTMLCanvasElement | null, mask: { x: number; y: number; width: number; height: number }, background?: string) {
+  const context = canvas?.getContext("2d");
+  if (!canvas || !context || !mask.width || !mask.height) return undefined;
+  const [br = -1, bg = -1, bb = -1] = background?.match(/[\d.]+/g)?.map(Number) ?? [];
+  const x0 = Math.max(0, Math.floor(mask.x));
+  const y0 = Math.max(0, Math.floor(mask.y));
+  const width = Math.min(canvas.width - x0, Math.ceil(mask.width));
+  const height = Math.min(canvas.height - y0, Math.ceil(mask.height));
+  if (width <= 0 || height <= 0) return undefined;
+  const { data } = context.getImageData(x0, y0, width, height);
+  const buckets = new Map<string, { count: number; r: number; g: number; b: number }>();
+  for (let py = 0; py < height; py += 1) {
+    for (let px = 0; px < width; px += 1) {
+      const index = (py * width + px) * 4;
+      const [r, g, b, a] = [data[index], data[index + 1], data[index + 2], data[index + 3]];
+      if (a < 128) continue;
+      // 跳过背景及其抗锯齿过渡色，剩下的高频色就是字形本色。
+      if (br >= 0 && Math.hypot(r - br, g - bg, b - bb) < 60) continue;
+      const key = `${r >> 4}-${g >> 4}-${b >> 4}`;
+      const bucket = buckets.get(key) ?? { count: 0, r: 0, g: 0, b: 0 };
+      bucket.count += 1;
+      bucket.r += r;
+      bucket.g += g;
+      bucket.b += b;
+      buckets.set(key, bucket);
+    }
+  }
+  const best = [...buckets.values()].sort((a, b) => b.count - a.count)[0];
+  // 至少 4 个像素聚成一类才可信，避免噪点决定文字颜色。
+  if (!best || best.count < 4) return undefined;
+  const channel = (sum: number) => Math.round(sum / best.count).toString(16).padStart(2, "0");
+  return `#${channel(best.r)}${channel(best.g)}${channel(best.b)}`;
+}
+
 function contrastTextColor(background?: string) {
   const channels = background?.match(/\d+/g)?.map(Number);
   if (!channels || channels.length < 3) return "#111827";
@@ -843,6 +879,8 @@ async function saveVisualEditorPdf(file: File, boxes: PdfTextBox[], notes: Visua
     widthRatio: box.editWidthRatio ?? box.widthRatio,
     fontSize: effectivePdfFontSize(box), fontFamily: box.fontFamily,
     fontWeight: box.fontWeight, color: box.color ?? box.autoColor ?? contrastTextColor(box.backgroundColor),
+    backgroundColor: box.backgroundColor,
+    patchRect: { xRatio: box.xRatio, yRatio: box.yRatio, widthRatio: box.widthRatio, heightRatio: box.heightRatio },
   }));
   for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
     for (const note of notes.filter(note => note.pageMode === "all" || note.pageNumber === pageNumber)) {
@@ -1323,9 +1361,16 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
             if (font?.name) style.fontFamily = font.name.replace(/^[A-Z]{6}\+/, "").replace(/-Regular$/i, "");
           }
           // Merge against the latest edits without making edits a render dependency.
-          const detectedBoxes = buildTextBoxes(pdfjsLib, textContent, viewport, pageNumber, []).map(box => ({ ...box, backgroundColor: pdfTextBackground(canvas, pdfTextMaskRect(box, canvas.width, canvas.height)) }));
+          const detectedBoxes = buildTextBoxes(pdfjsLib, textContent, viewport, pageNumber, []).map(box => {
+            const mask = pdfTextMaskRect(box, canvas.width, canvas.height);
+            const backgroundColor = pdfTextBackground(canvas, mask);
+            return { ...box, backgroundColor, autoColor: pdfTextInkColor(canvas, mask, backgroundColor) };
+          });
           setPdfTextBoxes((current) => {
-            const nextBoxes = buildTextBoxes(pdfjsLib, textContent, viewport, pageNumber, current).map(box => ({ ...box, backgroundColor: detectedBoxes.find(item => item.id === box.id)?.backgroundColor }));
+            const nextBoxes = buildTextBoxes(pdfjsLib, textContent, viewport, pageNumber, current).map(box => {
+              const detected = detectedBoxes.find(item => item.id === box.id);
+              return { ...box, backgroundColor: detected?.backgroundColor, autoColor: box.color ? box.autoColor : detected?.autoColor ?? box.autoColor };
+            });
             return [...current.filter((box) => box.pageNumber !== pageNumber), ...nextBoxes];
           });
           setMessage(detectedBoxes.length > 0 ? `第 ${pageNumber} 页识别到 ${detectedBoxes.length} 个可编辑文字块。` : "这一页没有识别到可编辑文字块。");
@@ -1793,7 +1838,9 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
         box.id === id
           ? {
               ...box,
-              autoColor: contrastTextColor(targetBackground),
+              // 原字色是文字自身的属性，拖到新位置不应被重算覆盖；
+              // 只有从未检测过（新增框）时才按新背景反推。
+              autoColor: box.autoColor ?? contrastTextColor(targetBackground),
               editXRatio: Math.max(0, Math.min(0.98, xRatio)),
               editYRatio: Math.max(0, Math.min(0.98, yRatio)),
             }
@@ -2391,7 +2438,9 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                                   <div
                                     className={`absolute overflow-hidden rounded-sm border ${
                                       selected
-                                        ? "border-[#f0b35a] bg-white text-[#111827] ring-2 ring-[#f0b35a]"
+                                        ? // 底色跟随采样的原背景色（内联 style 提供），不再强制白底：
+                                          // 深底白字的标题选中时必须仍是深底，白底会盖住绿条。
+                                          "border-[#f0b35a] ring-2 ring-[#f0b35a]"
                                         : changed
                                           ? "cursor-move touch-none border-transparent bg-transparent text-[#111827]"
                                           : "border-transparent bg-transparent text-transparent hover:border-[#1f6f67]"

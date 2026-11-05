@@ -6,7 +6,15 @@ import type { PDFFont } from 'pdf-lib';
 import { loadFontkit, loadPdfLib } from './pdf-lib-loader.ts';
 import { removeTextObjects, type TextRemoval } from './pdf-redaction.ts';
 
-export type ExportText = { pageNumber: number; text: string; xRatio: number; yRatio: number; widthRatio: number; fontSize: number; fontFamily?: string; fontWeight?: number; color?: string };
+export type ExportText = {
+  pageNumber: number; text: string; xRatio: number; yRatio: number; widthRatio: number; fontSize: number;
+  fontFamily?: string; fontWeight?: number; color?: string;
+  // pdfium 的 redactTextInRects 移除原文字后会把该区域涂成白色矩形。被编辑的
+  // 文字块必须在重绘前用采样到的原背景色把这块白补上，否则深底白字的标题
+  // 会留下白块。
+  backgroundColor?: string;
+  patchRect?: { xRatio: number; yRatio: number; widthRatio: number; heightRatio: number };
+};
 export type ExportHighlight = { pageNumber: number; xRatio: number; yRatio: number; widthRatio: number; heightRatio: number; color: string };
 
 export async function removeInWorker(data: ArrayBuffer, regions: TextRemoval[]): Promise<ArrayBuffer> {
@@ -105,6 +113,13 @@ export async function writeEditablePdf(data: ArrayBuffer, texts: ExportText[], h
       page.drawRectangle({x,y,width:mark.widthRatio*width,height:mark.heightRatio*height,rotate:degrees(rotation),color:color(mark.color),opacity:0.45,borderWidth:0});
     }
     for (const text of texts.filter(t=>t.pageNumber===i+1 && t.text.trim())) {
+      // 先补背景再画字：顺序不能反，否则文字被自己的底色盖住。
+      if (text.patchRect && text.backgroundColor) {
+        const patch = text.patchRect;
+        // 外扩 1pt，盖住 redact 区域边缘的抗锯齿残留。
+        const [px,py] = point(patch.xRatio*width - 1,(patch.yRatio+patch.heightRatio)*height + 1);
+        page.drawRectangle({x:px,y:py,width:patch.widthRatio*width+2,height:patch.heightRatio*height+2,rotate:degrees(rotation),color:color(text.backgroundColor),borderWidth:0});
+      }
       const font = await fontFor(text), size = text.fontSize;
       const lines = wrapPdfText(text.text,Math.max(1,text.widthRatio*width),font,size);
       // `yRatio` is the visual top edge. PDF drawText takes a baseline; deriving

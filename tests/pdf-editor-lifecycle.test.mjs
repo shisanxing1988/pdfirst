@@ -33,7 +33,7 @@ async function runEditor(textItems) {
       return {promise: Promise.resolve({numPages: 1, getPage: async () => page}), destroy: async () => { destroys++; }};
     },
   };
-  const names = ['useEffect','pdfjsLibMock','previewUrl','activeTool','editMode','canvasRef','fetch','currentPage','zoom','setCanvasSize','setPdfPageCount','previewingOutput','buildTextBoxes','setPdfTextBoxes','setMessage','setThumbnailUrls','document','blobFromCanvas','pdfTextBackground','pdfTextMaskRect'];
+  const names = ['useEffect','pdfjsLibMock','previewUrl','activeTool','editMode','canvasRef','fetch','currentPage','zoom','setCanvasSize','setPdfPageCount','previewingOutput','buildTextBoxes','setPdfTextBoxes','setMessage','setThumbnailUrls','document','blobFromCanvas','pdfTextBackground','pdfTextMaskRect','pdfTextInkColor'];
   const invoke = new Function(...names, compiled);
   function render() {
     slot = 0;
@@ -48,7 +48,7 @@ async function runEditor(textItems) {
     async () => ({arrayBuffer: async () => new ArrayBuffer(8)}), 1, 1.35, () => {}, () => {}, false,
     (_lib, content, _viewport, _page, current) => content.items.map(item => ({...item, text: current.find(box => box.id === item.id)?.text ?? item.text})),
     updater => { boxes = updater(boxes); dirty = true; }, () => {}, () => {},
-    {createElement: () => ({getContext: () => ({})})}, async () => new Blob(['thumbnail']), () => '#ffffff', () => ({}));
+    {createElement: () => ({getContext: () => ({})})}, async () => new Blob(['thumbnail']), () => '#ffffff', () => ({}), () => undefined);
   }
   for (let i = 0; i < 10; i++) {
     if (dirty) { dirty = false; render(); }
