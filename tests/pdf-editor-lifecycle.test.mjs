@@ -5,7 +5,7 @@ import ts from 'typescript';
 
 const source = readFileSync(new URL('../app/toolbox.tsx', import.meta.url), 'utf8');
 const start = source.indexOf('  useEffect(() => {\n    let cancelled = false;\n    let documentTask:');
-const end = source.indexOf('\n  function clearOutputs()', start);
+const end = source.indexOf('\n  function updateOutputName(', start);
 const typedEffects = source.slice(start, end);
 const compiled = ts.transpileModule(typedEffects, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText
   .replaceAll('import("pdfjs-dist/legacy/build/pdf.mjs")', 'Promise.resolve(pdfjsLibMock)');

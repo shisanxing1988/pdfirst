@@ -70,6 +70,10 @@ type HighlightMark = {
   color: string;
 };
 
+// 撤销/重做只快照这三个数组；它们的元素在更新时都是整体替换，所以快照只存引用，
+// 一次撤销的额外内存是三个数组头。
+type EditorSnapshot = { pdfTextBoxes: PdfTextBox[]; visualTexts: VisualText[]; highlights: HighlightMark[] };
+
 const tools: Array<{
   id: ToolId;
   kind: ToolKind;
@@ -1063,7 +1067,7 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
   const [quality, setQuality] = useState(76);
   const [maxSide, setMaxSide] = useState(1600);
   const [format, setFormat] = useState("image/webp");
-  const [editText, setEditText] = useState("请输入文字");
+  const [editText, setEditText] = useState("");
   const [editMode, setEditMode] = useState("visual");
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
@@ -1087,6 +1091,9 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
   const [draftHighlight, setDraftHighlight] = useState<HighlightMark | null>(null);
   const [editorTool, setEditorTool] = useState<EditorTool>("edit-text");
   const [selectedTextId, setSelectedTextId] = useState("");
+  // 新增文字的 id：进入行内输入状态，双击已有文字框也会进入。
+  const [editingVisualTextId, setEditingVisualTextId] = useState("");
+  const [historyState, setHistoryState] = useState({ canUndo: false, canRedo: false });
   const [placingText, setPlacingText] = useState(false);
   const [pdfTextBoxes, setPdfTextBoxes] = useState<PdfTextBox[]>([]);
   const [thumbnailUrls, setThumbnailUrls] = useState<string[]>([]);
@@ -1102,11 +1109,30 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
   const [message, setMessage] = useState(initialTool ? "选择文件后，再点击处理按钮生成文件。" : "文件只在你的浏览器里处理。");
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const selectedPdfTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const visualTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const sealInputRef = useRef<HTMLInputElement | null>(null);
   const dragTextRef = useRef<{ id: string; dx: number; dy: number; height: number; moved: boolean } | null>(null);
   const dragPdfTextRef = useRef<{ id: string; dx: number; dy: number; moved: boolean } | null>(null);
   const highlightDragRef = useRef<{ xRatio: number; yRatio: number } | null>(null);
   const suppressPdfTextClickRef = useRef(false);
+  // 撤销栈：在每次会改变页面内容的操作之前记录一次快照。
+  const editorHistoryRef = useRef<{ past: EditorSnapshot[]; future: EditorSnapshot[] }>({ past: [], future: [] });
+  // 文字输入的撤销采用“首字符才入栈”：聚焦时先存快照，真正改动时才压栈，
+  // 避免点进去又没改产生一次无效撤销。
+  const pendingSnapshotRef = useRef<EditorSnapshot | null>(null);
+  const undoRef = useRef<() => void>(() => {});
+  const redoRef = useRef<() => void>(() => {});
+  // clearOutputs / clearPreview 需要在事件回调里读“最新”的列表来释放 Blob URL，
+  // 用 ref 镜像避免在 setState updater 里做副作用。
+  const outputsRef = useRef<OutputFile[]>([]);
+  const previewUrlRef = useRef("");
+  const editablePdfUrlRef = useRef("");
+
+  useEffect(() => {
+    outputsRef.current = outputs;
+    previewUrlRef.current = previewUrl;
+    editablePdfUrlRef.current = editablePdfUrl;
+  }, [outputs, previewUrl, editablePdfUrl]);
 
   useEffect(() => {
     if (selectedPdfTextId && selectedPdfTextAreaRef.current) {
@@ -1114,6 +1140,134 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
       selectedPdfTextAreaRef.current.select();
     }
   }, [selectedPdfTextId]);
+
+  useEffect(() => {
+    const area = visualTextAreaRef.current;
+    if (!editingVisualTextId || !area) return;
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
+  }, [editingVisualTextId]);
+
+  // 清空产物/预览：Blob URL 的释放放在事件回调里做（读 ref 镜像），
+  // 不在 setState updater 里产生副作用。
+  function clearOutputs() {
+    const current = outputsRef.current;
+    if (current.length > 0) {
+      current.forEach((output) => URL.revokeObjectURL(output.url));
+      outputsRef.current = [];
+    }
+    setOutputPreview(null);
+    setOutputs([]);
+  }
+
+  function clearPreview() {
+    const current = previewUrlRef.current;
+    if (current && current === editablePdfUrlRef.current) URL.revokeObjectURL(current);
+    previewUrlRef.current = "";
+    editablePdfUrlRef.current = "";
+    setPreviewUrl("");
+    setEditablePdfUrl("");
+    setPreviewingOutput(false);
+    setThumbnailUrls([]);
+  }
+
+  function syncHistoryState() {
+    setHistoryState({
+      canUndo: editorHistoryRef.current.past.length > 0,
+      canRedo: editorHistoryRef.current.future.length > 0,
+    });
+  }
+
+  // 必须在 setState 之前调用：快照记录的是“操作前”的页面状态。
+  function recordHistory() {
+    const history = editorHistoryRef.current;
+    history.past.push({ pdfTextBoxes, visualTexts, highlights });
+    if (history.past.length > 60) history.past.shift();
+    history.future.length = 0;
+    syncHistoryState();
+  }
+
+  // —— 文字输入的撤销采用“首字符才入栈”：聚焦时先存快照，真正改动时才压栈，
+  // 避免点进去又没改产生一次无效撤销。刚添加的新文字框例外：它的首次输入
+  // 不再单独入栈（recordHistory 存的快照已经覆盖了“添加前”的状态），
+  // 这样 ⌘Z 一次就能把整个新文字框撤掉。
+  const freshTextNoteRef = useRef(false);
+  function beginTextEdit() {
+    pendingSnapshotRef.current = { pdfTextBoxes, visualTexts, highlights };
+  }
+  function commitTextChange() {
+    if (freshTextNoteRef.current) {
+      // 新文字框的首次输入：不入栈，同时清掉待用快照，防止后续按键把
+      // 聚焦时的旧快照误压栈（那会造成要按两次撤销）。
+      freshTextNoteRef.current = false;
+      pendingSnapshotRef.current = null;
+      return;
+    }
+    const snapshot = pendingSnapshotRef.current;
+    if (!snapshot) return;
+    pendingSnapshotRef.current = null;
+    const history = editorHistoryRef.current;
+    history.past.push(snapshot);
+    if (history.past.length > 60) history.past.shift();
+    history.future.length = 0;
+    syncHistoryState();
+  }
+  function cancelTextEdit() {
+    pendingSnapshotRef.current = null;
+    freshTextNoteRef.current = false;
+  }
+
+  function applySnapshot(snapshot: EditorSnapshot) {
+    setPdfTextBoxes(snapshot.pdfTextBoxes);
+    setVisualTexts(snapshot.visualTexts);
+    setHighlights(snapshot.highlights);
+    setSelectedPdfTextId("");
+    setSelectedTextId("");
+    setEditingVisualTextId("");
+    setPlacingText(false);
+    clearOutputs();
+  }
+
+  function undoEditor() {
+    const history = editorHistoryRef.current;
+    const previous = history.past.pop();
+    if (!previous) return;
+    history.future.push({ pdfTextBoxes, visualTexts, highlights });
+    applySnapshot(previous);
+    syncHistoryState();
+    setMessage("已撤销上一步。");
+  }
+
+  function redoEditor() {
+    const history = editorHistoryRef.current;
+    const next = history.future.pop();
+    if (!next) return;
+    history.past.push({ pdfTextBoxes, visualTexts, highlights });
+    applySnapshot(next);
+    syncHistoryState();
+    setMessage("已重做。");
+  }
+
+  useEffect(() => {
+    undoRef.current = undoEditor;
+    redoRef.current = redoEditor;
+  });
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      const key = event.key.toLowerCase();
+      if (key !== "z" && key !== "y") return;
+      const target = event.target as HTMLElement | null;
+      // 输入框里交给浏览器原生撤销，否则会把整段输入一次撤掉。
+      if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable)) return;
+      event.preventDefault();
+      if (key === "y" || event.shiftKey) redoRef.current();
+      else undoRef.current();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const selectedTool = useMemo(() => tools.find((tool) => tool.id === activeTool) ?? tools[0], [activeTool]);
   const isPdfTool = selectedTool.kind === "pdf";
@@ -1255,24 +1409,6 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
       createdUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [activeTool, previewUrl]);
-
-  function clearOutputs() {
-    setOutputPreview(null);
-    setOutputs((current) => {
-      current.forEach((output) => URL.revokeObjectURL(output.url));
-      return [];
-    });
-  }
-
-  function clearPreview() {
-    setPreviewUrl((current) => {
-      if (current && current === editablePdfUrl) URL.revokeObjectURL(current);
-      return "";
-    });
-    setEditablePdfUrl("");
-    setPreviewingOutput(false);
-    setThumbnailUrls([]);
-  }
 
   function updateOutputName(url: string, name: string) {
     setOutputs((current) => current.map((output) => (output.url === url ? { ...output, name } : output)));
@@ -1476,7 +1612,7 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
     const rect = event.currentTarget.getBoundingClientRect();
     const note: VisualText = {
       id: crypto.randomUUID(),
-      text: editText.trim() || "请输入文字",
+      text: editText,
       xRatio: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
       yRatio: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
       pageMode: editPageMode,
@@ -1486,10 +1622,38 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
       color: editColor,
       clarity: 100,
     };
+    recordHistory();
     setVisualTexts((current) => [...current, note]);
-    setSelectedTextId("");
-    setMessage("已在页面上添加文字。需要调整时可拖动文字框，或点击文字后修改。");
+    setSelectedTextId(note.id);
+    setSelectedPdfTextId("");
+    // 落点即进入输入状态：不用再点一次才能打字。
+    // 标记为新文字框：首次输入不再单独压撤销栈，⌘Z 一次撤掉整个框。
+    freshTextNoteRef.current = true;
+    setEditingVisualTextId(note.id);
+    setEditText("");
     setPlacingText(false);
+    setEditorTool("edit-text");
+    setMessage("文字框已放好，直接输入内容；按 Esc 或点击空白处结束，⌘/Ctrl+Z 可撤销。");
+  }
+
+  function updateVisualTextText(id: string, text: string) {
+    setVisualTexts((current) => current.map((note) => (note.id === id ? { ...note, text } : note)));
+  }
+
+  function finishVisualTextEditing(id: string) {
+    const wasFresh = freshTextNoteRef.current;
+    cancelTextEdit();
+    setEditingVisualTextId((current) => (current === id ? "" : current));
+    const note = visualTexts.find((item) => item.id === id);
+    if (note && !note.text.trim()) {
+      // 空文字框不留在页面上，否则导出一个看不见的空对象。
+      // 如果这个框是刚添加的（撤销栈顶还存着它的“添加前”快照），一并弹出，
+      // 避免留下一次什么都没变的撤销步骤。
+      if (wasFresh) editorHistoryRef.current.past.pop();
+      syncHistoryState();
+      setVisualTexts((current) => current.filter((item) => item.id !== id));
+      setSelectedTextId((current) => (current === id ? "" : current));
+    }
   }
 
   function startHighlight(event: React.PointerEvent<HTMLDivElement>) {
@@ -1537,6 +1701,7 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
     highlightDragRef.current = null;
     setDraftHighlight(null);
     if (!draft || draft.widthRatio < 0.01 || draft.heightRatio < 0.006) return;
+    recordHistory();
     setHighlights((current) => [...current, { ...draft, id: crypto.randomUUID() }]);
     setMessage("已添加高亮标记。");
   }
@@ -1560,6 +1725,8 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
   }
 
   function removeSelectedText() {
+    if (!selectedTextId) return;
+    recordHistory();
     setVisualTexts((current) => current.filter((note) => note.id !== selectedTextId));
     setSelectedTextId("");
     clearOutputs();
@@ -1568,6 +1735,7 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
 
   function deleteSelectedPdfText() {
     if (!selectedPdfTextId) return;
+    recordHistory();
     setPdfTextBoxes(current => current.map(box => box.id === selectedPdfTextId ? { ...box, deleted: true } : box));
     setSelectedPdfTextId("");
     clearOutputs();
@@ -2208,8 +2376,8 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                                     key={box.id}
                                     onClick={(event) => {
                                       if (editorTool === "highlight") return;
+                                      if (editorTool === "add-text") return; // 添加模式：不拦截，让点击冒泡到页面去落点
                                       event.stopPropagation();
-                                      if (editorTool === "add-text") return;
                                       setEditorTool("edit-text");
                                       if (suppressPdfTextClickRef.current) {
                                         suppressPdfTextClickRef.current = false;
@@ -2222,6 +2390,7 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                                       if (event.target !== event.currentTarget) return;
                                       if (event.key === "Delete" || event.key === "Backspace") {
                                         event.preventDefault(); event.stopPropagation();
+                                        recordHistory();
                                         setPdfTextBoxes(current => current.map(item => item.id === box.id ? { ...item, deleted: true } : item));
                                         setSelectedPdfTextId(""); clearOutputs(); return;
                                       }
@@ -2253,6 +2422,7 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                                       const parent = event.currentTarget.parentElement;
                                       if (!drag || drag.id !== box.id || !parent) return;
                                       const parentBox = parent.getBoundingClientRect();
+                                      if (!drag.moved) recordHistory();
                                       drag.moved = true;
                                       movePdfTextBox(
                                         box.id,
@@ -2296,16 +2466,18 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                                         className="h-full w-full resize-none overflow-hidden whitespace-pre-wrap break-all border-0 bg-transparent p-0 text-[#111827] outline-none"
                                         style={{ font: "inherit", lineHeight: "inherit", color: "inherit", overflowWrap: "anywhere" }}
                                         aria-label="编辑 PDF 文字"
+                                        onFocus={beginTextEdit}
                                         onKeyDown={(event) => {
                                           event.stopPropagation();
                                           if (event.key === "Escape") { event.preventDefault(); event.currentTarget.blur(); }
                                           if ((event.key === "Backspace" || event.key === "Delete") && !box.text) { event.preventDefault(); deleteSelectedPdfText(); }
                                         }}
                                         onBlur={(event) => {
+                                          cancelTextEdit();
                                           if (!event.currentTarget.parentElement?.contains(event.relatedTarget as Node | null)) finishPdfTextEditing(box.id);
                                         }}
                                         onClick={(event) => event.stopPropagation()}
-                                        onChange={(event) => updateSelectedPdfText(event.target.value)}
+                                        onChange={(event) => { commitTextChange(); updateSelectedPdfText(event.target.value); }}
                                         value={box.text}
                                         wrap="soft"
                                       />
@@ -2346,19 +2518,50 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                               visualTexts
                                 .filter((note) => note.pageMode === "all" || note.pageNumber === currentPage)
                                 .map((note) => (
-                                  <button
+                                  <div
                                     className={`absolute touch-none cursor-move rounded border p-0 text-left font-bold text-[#1f6f67] ${
                                       selectedTextId === note.id ? "border-[#f0b35a] bg-white/90 shadow-sm ring-2 ring-[#f0b35a]" : "border-transparent bg-transparent hover:border-[#1f6f67] hover:bg-white/80"
                                     }`}
                                     key={note.id}
+                                    role="button"
+                                    tabIndex={0}
+                                    title="单击选中，双击编辑文字"
+                                    onDoubleClick={(event) => {
+                                      if (editorTool === "highlight") return;
+                                      if (editorTool === "add-text") return;
+                                      event.stopPropagation();
+                                      setSelectedTextId(note.id);
+                                      setSelectedPdfTextId("");
+                                      setEditingVisualTextId(note.id);
+                                    }}
                                     onClick={(event) => {
                                       if (editorTool === "highlight") return;
+                                      if (editorTool === "add-text") return; // 添加模式：让点击冒泡到页面去落点
                                       event.stopPropagation();
                                       setSelectedTextId(note.id);
                                       setSelectedPdfTextId("");
                                     }}
+                                    onKeyDown={(event) => {
+                                      if (event.target !== event.currentTarget) return;
+                                      if (event.key === "Enter") {
+                                        event.preventDefault();
+                                        setSelectedTextId(note.id);
+                                        setEditingVisualTextId(note.id);
+                                        return;
+                                      }
+                                      if (event.key === "Delete" || event.key === "Backspace") {
+                                        event.preventDefault();
+                                        recordHistory();
+                                        setVisualTexts(current => current.filter(item => item.id !== note.id));
+                                        setSelectedTextId("");
+                                        clearOutputs();
+                                      }
+                                    }}
                                     onPointerDown={(event) => {
                                       if (editorTool === "highlight") return;
+                                      // 正在输入时不要开始拖动，否则光标会被抢走。
+                                      if (editingVisualTextId === note.id) return;
+                                      if (editorTool === "add-text") return; // 添加模式：让点击冒泡到页面去落点
                                       event.stopPropagation();
                                       const parent = event.currentTarget.parentElement;
                                       if (!parent) return;
@@ -2379,6 +2582,7 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                                       const parent = event.currentTarget.parentElement;
                                       if (!drag || drag.id !== note.id || !parent) return;
                                       const parentBox = parent.getBoundingClientRect();
+                                      if (!drag.moved) recordHistory();
                                       drag.moved = true;
                                       moveVisualText(
                                         note.id,
@@ -2405,10 +2609,30 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                                       color: note.color ?? "#1f6f67",
                                       textShadow: "none",
                                     }}
-                                    type="button"
                                   >
-                                    {note.text}
-                                  </button>
+                                    {editingVisualTextId === note.id ? (
+                                      <textarea
+                                        ref={visualTextAreaRef}
+                                        aria-label="编辑新增文字"
+                                        className="min-h-[1.25em] w-[12em] resize-none overflow-hidden whitespace-pre-wrap break-all rounded-sm border-0 bg-white/95 p-0 outline-none ring-2 ring-[#f0b35a] placeholder:text-[#94a3b8]"
+                                        placeholder="输入文字"
+                                        style={{ font: "inherit", lineHeight: "inherit", color: "inherit", overflowWrap: "anywhere" }}
+                                        value={note.text}
+                                        onFocus={beginTextEdit}
+                                        onChange={(event) => { commitTextChange(); updateVisualTextText(note.id, event.target.value); }}
+                                        onBlur={() => finishVisualTextEditing(note.id)}
+                                        onClick={(event) => event.stopPropagation()}
+                                        onPointerDown={(event) => event.stopPropagation()}
+                                        onDoubleClick={(event) => event.stopPropagation()}
+                                        onKeyDown={(event) => {
+                                          event.stopPropagation();
+                                          if (event.key === "Escape") { event.preventDefault(); event.currentTarget.blur(); }
+                                        }}
+                                      />
+                                    ) : (
+                                      note.text || <span className="italic text-[#94a3b8]">双击输入文字</span>
+                                    )}
+                                  </div>
                                 ))}
                           </div>
                             <div className="sticky bottom-4 z-20 mx-auto mt-4 flex w-fit items-center gap-3 rounded border border-[#d7dde8] bg-white px-4 py-2 text-sm font-black text-[#18201f] shadow-lg">
@@ -2485,22 +2709,48 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                 </label>
                 {editMode === "visual" ? (
                   <>
+                    <div className="flex gap-2 md:col-span-2">
+                      <button type="button" disabled={!historyState.canUndo} onClick={undoEditor}
+                        className="flex-1 rounded border border-[#cfc6b7] bg-white px-3 py-2 text-sm font-black disabled:opacity-40">
+                        撤销
+                      </button>
+                      <button type="button" disabled={!historyState.canRedo} onClick={redoEditor}
+                        className="flex-1 rounded border border-[#cfc6b7] bg-white px-3 py-2 text-sm font-black disabled:opacity-40">
+                        重做
+                      </button>
+                    </div>
                     {selectedPdfText ? (
                       <div className="rounded border border-[#1f6f67] bg-[#eef7f4] p-3 md:col-span-2">
                         <strong className="text-sm">正在页面上编辑文字</strong>
                         <button type="button" onMouseDown={event => event.preventDefault()} onClick={deleteSelectedPdfText} className="mt-2 block rounded border border-red-300 bg-white px-3 py-2 text-sm text-red-700">删除整个文字块</button>
                         <p className="mt-2 text-xs leading-5 text-[#4f5a55]">直接在左侧选中的文字框里输入，修改效果会立即显示在 PDF 页面上。</p>
                       </div>
+                    ) : selectedVisualText ? (
+                      <div className="rounded border border-[#f0b35a] bg-[#fdf8ee] p-3 md:col-span-2">
+                        <strong className="text-sm">正在编辑新增文字</strong>
+                        <textarea
+                          className="mt-2 w-full resize-y rounded border border-[#cfc6b7] bg-white px-3 py-2 text-sm"
+                          rows={3}
+                          value={selectedVisualText.text}
+                          aria-label="新增文字内容"
+                          placeholder="输入要放到页面上的文字"
+                          onFocus={beginTextEdit}
+                          onChange={event => { commitTextChange(); updateVisualTextText(selectedVisualText.id, event.target.value); }}
+                          onBlur={cancelTextEdit}
+                        />
+                        <button type="button" onClick={removeSelectedText} className="mt-2 rounded border border-red-300 bg-white px-3 py-2 text-sm text-red-700">删除这个文字框</button>
+                        <p className="mt-2 text-xs leading-5 text-[#66706c]">也可以直接在左侧的文字框里输入，两边同步。</p>
+                      </div>
                     ) : (
                       <div className="rounded border border-[#d8d1c3] bg-[#fbfaf6] p-3 md:col-span-2">
                         <strong className="text-sm">点击左侧 PDF 页面中的文字块开始编辑</strong>
-                        <p className="mt-2 text-xs leading-5 text-[#66706c]">如果页面没有出现文字框，说明这个 PDF 可能是扫描件或文字编码过于复杂。</p>
+                        <p className="mt-2 text-xs leading-5 text-[#66706c]">如果页面没有出现文字框，说明这个 PDF 可能是扫描件或文字编码过于复杂。点「添加文字到页面」可以在任意位置写新文字，双击文字可以重新编辑。</p>
                       </div>
                     )}
                     {pdfTextBoxes.some(box => box.deleted) && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={() => { setPdfTextBoxes(current => current.map(box => box.deleted ? { ...box, deleted: false } : box)); clearOutputs(); setMessage("已恢复删除前的文字块。"); }}>恢复已删除文字块</button>}
                     <label className="text-sm font-bold md:col-span-2">
-                      新增文字内容
-                      <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" value={editText} onChange={(event) => setEditText(event.target.value)} />
+                      新增文字内容（可选）
+                      <input className="mt-2 w-full rounded border border-[#cfc6b7] px-3 py-2" placeholder="留空也行，放好位置后直接输入" value={editText} onChange={(event) => setEditText(event.target.value)} />
                     </label>
                     <label className="text-sm font-bold">
                       字体
@@ -2547,11 +2797,7 @@ export default function Toolbox({ initialTool, embedded = false }: { initialTool
                       className={`rounded px-4 py-2 text-sm font-black md:col-span-2 ${
                         placingText ? "bg-[#f0b35a] text-[#3a2404]" : "bg-[#1f6f67] text-white hover:bg-[#15534d]"
                       }`}
-                      onClick={() => {
-                        setPlacingText((current) => !current);
-                        setSelectedPdfTextId("");
-                        setMessage(placingText ? "已取消添加文字。" : "请在左侧 PDF 页面上点击要放置文字的位置。");
-                      }}
+                      onClick={() => (placingText ? stopTextPlacement() : startTextPlacement())}
                       type="button"
                     >
                       {placingText ? "取消添加文字" : "添加文字到页面"}
