@@ -55,6 +55,23 @@ git push origin --tags
 
 `deploy:cloudflare` 输出里的 `Current Version ID` 记到下面的发布日志里。
 
+## 搜索引擎收录（自动化）
+
+Bing 系（Bing / Yandex / Naver / Seznam）走 **IndexNow**，无需登录、无需 OAuth：站点根目录放一个 `<key>.txt`（文件名和内容都等于 key），提交时带上它证明所有权。
+
+```bash
+npm run seo:indexnow                 # 提交 sitemap 里的全部 URL
+npm run seo:indexnow -- --url /pdf-edit   # 只提交单个路径，可重复传
+npm run seo:indexnow -- --dry-run     # 只打印，不发送
+```
+
+- key 文件：`public/a83f4b9c5b29d8eadf33f67fda897499.txt`，**不要删**，删了 Bing 会认为站点所有权失效。
+- `deploy:cloudflare` 末尾已串上 `node scripts/indexnow.mjs`，**每次部署自动提交**，不需要手动跑。
+- 端点：`api.indexnow.org`（分发给所有参与引擎）+ `www.bing.com`（Bing 专用），返回 200/202 即成功。
+- 只应提交新增或内容有变化的 URL；全量重复提交不会被惩罚，但没必要高频做。
+
+Google 不支持 IndexNow，必须用 Search Console：`https://search.google.com/search-console` → 添加 `pdfirst.com` 资源（DNS 或 HTML 文件验证）→ 提交 `https://pdfirst.com/sitemap.xml`。这一步需要账号登录，无法脚本化。
+
 ## 回滚
 
 ```bash
